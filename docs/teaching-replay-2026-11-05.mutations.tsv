@@ -1,0 +1,9 @@
+verifier-identity	wrong-verifier	39	0	CAUGHT
+self-verification	self-reported-success	40	39	CAUGHT
+dependency-gate	dispatch-before-dependencies	43	0	CAUGHT
+generation-bump	stale-generation-dispatch	34	0	CAUGHT
+duplicate-effect	duplicate-effect	45	0	CAUGHT
+model-budget	model-call-budget	37	0	CAUGHT
+objective-cancel	cancel-twice	47	0	CAUGHT
+cycle-check	plan-cycle	20	0	CAUGHT
+privacy-owner	plan-changed-privacy-owner	17	0	CAUGHT
