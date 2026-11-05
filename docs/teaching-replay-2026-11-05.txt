@@ -1,0 +1,33 @@
+# Teaching replay record, 2026-11-05 (aien#10)
+
+Repository: aien-dev/aien at c149760e8722ed943abcc5e3c7a33e2065b4036c (main; clean tree, receipt field allen_tree_dirty false)
+Host: spark-b87b, Linux 7.0.0-1019-nvidia aarch64
+Tools: GNU bash 5.2.21, Python 3.12.3, git 2.43.0
+Wrapper: nice -n 19 taskset -c 0-9,15-19 (CPU placement only)
+
+Compiler, rebuilt from seed:
+  aien-dev/omega-mv worktree at 29b12760f4c962606411d6bf25032aedef063301; seed/out/omc removed, then `sh seed/omega-from-seed.sh` -> RC=0
+  seed/out/omc SHA-256 191b776ef98821597c3e30655da6d680a9b66edbc9ceaca3c39c61ea6df098e9 (= build.sh compiler_pin; byte-identical to the committed file)
+  seed/omc/omc.om SHA-256 8608fa11f6a2cf1c50db22d871eef16b00d5bc719bc1a222cc3e456984ac5ebf (= build.sh seed_source_pin)
+  tools/verify-elf.sh from aien-dev/omega-bridge e461b7a, SHA-256 afe24b29f105241f268fbaf3bfdd8e010c790a13b8f807de1263f92aacca76cd
+  laid out under an omega-mv worktree at c434565c67552c0b01df2d7f76c1a04287c70560 as build/L574/toolchain/
+
+Command:
+  OMEGA_WORKTREE=<omega-mv worktree at c434565c> GM_RUN_ROOT=<scratch> bash tests/goal_microjobs/gate.sh
+Exit: 0
+Output: PASS <scratch>/offline-20261105T015338Z-AonbQB/receipt.json checks=158   (raw: teaching-replay-2026-11-05.raw.txt)
+Receipt (unsigned) SHA-256 e0fe6f9be7c2687134dab7e569a558dcfe4a035d54e3795932b68a23febaeecd:
+  verdict PASS; checks_passed 158; mutants_caught 9; compiler_sha256 191b776e...; omega_source_commit c434565c...;
+  kernel_executable_sha256 615d6757944765ab5dd710a420efe93315ffd8bffa666b823c59edc2aaa89bed; model_inference NOT_RUN
+Mutation table: teaching-replay-2026-11-05.mutations.tsv (SHA-256 3d1471d54066671b6b317c100773713da0191852c987ccc2933d75c93044ecb1)
+  columns: mutant, probe, refusal code a correct kernel gives, exit of the mutant kernel; all 9 CAUGHT
+
+Negative control: OMEGA_WORKTREE pointed at the omega-mv worktree at 29b12760 (wrong commit)
+  -> exit 3, "BLOCKED: Omega checkout must be c434565c67552c0b01df2d7f76c1a04287c70560"
+
+Source hashes: src/goal_microjobs/kernel.om 223c034257bca0ce9c241f8c7c1e563f6e5c2d39b0583530cb92024c69526c24;
+  tests/goal_microjobs/gate.sh bfcfcc3880aff81ecc8f3346efafcb30259510590f780be27ccca719dd77e7bc;
+  scripts/goal_microjobs/build.sh b0974f60224394868757709637d93132ac0cd34e0f19d7dffff095e1dc2a9137
+
+Scope: offline synthetic fixtures. Not run: model inference, Cortex write/restart, routing comparison, B0, GPU or hardware.
+The run was by an agent following the recipe; a human reader replay is not recorded.

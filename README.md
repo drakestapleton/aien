@@ -6,6 +6,10 @@ Allen has now evolved into the final Aien (2026-10-26). This repository was `aie
 
 **Pre-alpha.** Nothing here is qualified. Every claim in this repository links to a file under `evidence/` or to a receipt in [aien-dev/aien-receipts](https://github.com/aien-dev/aien-receipts); a sentence with no link is a plan, not a result.
 
+## How it works: one implemented evaluation flow
+
+The only evaluation flow on `main` today is the microjob admission kernel ([docs/GOAL_MICROJOBS.md](docs/GOAL_MICROJOBS.md)). Planners and models propose events for one objective, and a seeded Omega program ([`src/goal_microjobs/kernel.om`](src/goal_microjobs/kernel.om)) admits them or refuses them with a coded exit, from the plan and journal alone. It holds no identity and writes no Cortex memory. **[The worked lesson](docs/TEACHING.md)** rebuilds the pinned compiler from seed and runs the offline gate: 158 checks pass and 9 deliberately broken kernels are caught. A wrong compiler pin refuses with exit 3. [Replay record](docs/teaching-replay-2026-11-05.txt). Model inference, Cortex, B0 and hardware remain NOT_RUN.
+
 ## What lives here and what does not
 
 | Here | Not here (owner) |
