@@ -1,0 +1,23 @@
+/usr/bin/bwrap
+--unshare-all
+--die-with-parent
+--ro-bind
+/
+/
+--dev
+/dev
+--proc
+/proc
+--tmpfs
+/tmp
+--ro-bind
+/dev/shm/hive/t_9ab90aee/cq-gate-CpnF3c/serve/8/repo
+/dev/shm/hive/t_9ab90aee/cq-gate-CpnF3c/serve/8/repo
+--chdir
+/dev/shm/hive/t_9ab90aee/cq-gate-CpnF3c/serve/8/repo
+--
+/usr/bin/python3
+-B
+-c
+import sys;[compile(open(p).read(),p,'exec') for p in sys.argv[1:]]
+semver/version.py

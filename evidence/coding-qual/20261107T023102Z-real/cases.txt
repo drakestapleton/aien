@@ -1,0 +1,9 @@
+OBSERVED r1 real-cross-file-change state=4 writes=0 answers=1 judge=FAIL
+CASE r1 real-cross-file-change PASS
+OBSERVED r2 real-failing-test state=4 writes=0 answers=1 judge=FAIL
+CASE r2 real-failing-test PASS
+OBSERVED r3 real-cancel-mid-task state=2 writes=0 answers=1 judge=FAIL
+CASE r3 real-cancel-mid-task PASS
+OBSERVED r4 real-resume-after-sigkill state=4 writes=0 answers=1 judge=FAIL
+CASE r4 real-resume-after-sigkill PASS
+CQCASE REAL PASS cases=4

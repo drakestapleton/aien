@@ -1,0 +1,13 @@
+id	role	family	split	verdict	reason	status	fin	ptok	ctok	ms	detail
+cd-de-ringbuf-write-rotate	coding	repo-write	dev	FAIL	exec	200	1	1	1	83	1
+cd-de-ringbuf-fix-rotate-0	coding	repo-fix	dev	FAIL	exec	200	1	1	1	83	1
+cd-de-ringbuf-write-chunk	coding	repo-write	dev	FAIL	exec	200	1	1	1	82	1
+cd-de-ringbuf-fix-chunk-0	coding	repo-fix	dev	FAIL	exec	200	1	1	1	83	1
+cd-de-ringbuf-write-window_sums	coding	repo-write	dev	FAIL	exec	200	1	1	1	83	1
+cd-de-ringbuf-fix-window_sums-0	coding	repo-fix	dev	FAIL	exec	200	1	1	1	83	1
+cd-de-semver-write-parse	coding	repo-write	dev	FAIL	exec	200	1	1	1	83	1
+cd-de-semver-fix-parse-0	coding	repo-fix	dev	FAIL	exec	200	1	1	1	83	1
+cd-de-semver-write-compare	coding	repo-write	dev	FAIL	exec	200	1	1	1	83	1
+cd-de-semver-fix-compare-0	coding	repo-fix	dev	FAIL	exec	200	1	1	1	83	1
+cd-de-semver-write-bump	coding	repo-write	dev	FAIL	exec	200	1	1	1	83	1
+cd-de-semver-fix-bump-0	coding	repo-fix	dev	FAIL	exec	200	1	1	1	83	1

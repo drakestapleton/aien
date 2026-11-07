@@ -34,7 +34,7 @@ if [ "${1:-}" = __inner ]; then
   rc2=0; bash "$here/tests/coding_qual/gate.sh" dra124 "$port" "$split" || rc2=$?
   echo "gate dra124 rc=$rc2"
   kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
-  for d in $(ls -d "$CQ_RUN_ROOT"/*-real "$CQ_RUN_ROOT"/*-dra124 2>/dev/null | tail -2); do cp "$slog" "$d/serve.log"; done
+  for d in $(ls -d "$CQ_RUN_ROOT"/*-real "$CQ_RUN_ROOT"/*-dra124 2>/dev/null | tail -2); do cp "$slog" "$d/model-serve.log"; done
   echo "INNER done $(date -u +%FT%TZ)"
   exit 0
 fi

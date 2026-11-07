@@ -1,0 +1,14 @@
+CASE c1 cross-file-change PASS
+CASE c2 failing-test-fixed PASS
+CASE c3 cancel-mid-task PASS
+CASE c4 resume-after-sigkill PASS
+CASE c5 crash-after-intent-resume PASS
+CASE c6 crash-after-write-resume PASS
+CASE c7 ownership-refusal FAIL step 5
+CASE c8 context-exceeded PASS
+CASE c9 no-action-budget PASS
+CASE c10 path-escape-refusal PASS
+CASE c11 judge-negative-control PASS
+CASE c12 verifier-negative-control PASS
+CASE c13 torn-journal-tail-resume PASS
+CQCASE SYNTHETIC FAIL failed=1 cases=13

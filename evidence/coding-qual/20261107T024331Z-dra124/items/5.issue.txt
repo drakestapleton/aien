@@ -1,0 +1,1 @@
+Task: A user reports a bug in `window_sums` (ringbuf/seq.py): window_sums([1, 2, 3, 4], 2) gives [3, 4, 5]; expected [3, 5, 7]. Fix the bug without changing the documented behaviour.

@@ -1,0 +1,1 @@
+Task: A user reports a bug in `parse` (semver/version.py): parse('1.2.3.4') returns (1, 2, 3, 4) instead of raising VersionError. Fix the bug without changing the documented behaviour.

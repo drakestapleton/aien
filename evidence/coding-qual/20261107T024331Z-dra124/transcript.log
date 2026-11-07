@@ -1,0 +1,24 @@
+label REAL
+repo 7771e99dcd33a9c2459542d4deb0de86103efb9d dirty=1
+omc 3ad9f10f64309e7acf8a725082b28e23a2a4aeb07e98322fb4dc0fcd8fc93194
+git 2.43.0 python3 3.12.3 bwrap 0.9.0
+host Linux 7.0.0-1019-nvidia aarch64
+started 20261107T024331Z
+fixture cq-s1 af278fb303f77fd63bafe2048d68d2fc21c4180c cq-s2 c7d591ec376ede76903ebd37ea181f6c1c1c7c18
+model ollm serve (aien-train main 0518c915dea370b3bffbb90d579b1daa5ba8b8f5, binary sha256 819664d5a2284189cd9baca67681675ed2b4685e19d1d976ce071b0f6fcaa5ea, omc e5b32567 2c824805) own Omega LLM rung-10 ck60000 sha256 a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f (T=256, d=384, 12 layers) tokenizer merges4096 OLLMTOK sha256 73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882; private netns port 18294; CPU only
+model_port 18294 serve_port 18295 split dev items 12
+accept 8c4fb0cb9f8de0c27da96d29ad69ccf4601b703132d78cd68aaecfc3b97eb5bd prereg 7133f654c23b087c4b1df7531f0b67c9bf9fe349d0ebc5325a73b2f3814a04c9 thresholds 393200abf747919de67653691fd7da769215782635a33a775ce4dd18b2c581e9
+agent steps=6 maxtok=256
+role	split	n	pass	not_run	rate	wilson95_lo	wilson95_hi	p50_ms	p95_ms	ctx_max	ctx_p95	crit	reasons	gate	verdict
+assistant	test	0	0	0	0.0000	0.0000	0.0000	0	0	0	0	0	none	gated	NOT_RUN
+coding	dev	12	0	0	0.0000	0.0000	0.2425	0	0	0	0	0	ctx=12	report	-
+coding	test	0	0	0	0.0000	0.0000	0.0000	0	0	0	0	0	none	gated	NOT_RUN
+hive	test	0	0	0	0.0000	0.0000	0.0000	0	0	0	0	0	none	gated	NOT_RUN
+harness	test	0	0	0	0.0000	0.0000	0.0000	0	0	0	0	0	none	gated	NOT_RUN
+overall	NOT_RUN
+
+role	split	family	pass	n
+coding	dev	repo-write	0	6
+coding	dev	repo-fix	0	6
+accept sum rc 3
+GATE REAL RAN (dra124 dev; verdict in summary.tsv)

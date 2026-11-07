@@ -1,0 +1,4 @@
+== journal 0 cqa1
+== step 1: inference started
+== step 1: inference failed reason 1 (1 ctx, 2 http, 3 conn, 4 json) status 400
+== terminal state 4 (1 DONE, 2 CANCELLED, 3 BUDGET, 4 FAILED)

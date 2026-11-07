@@ -1,0 +1,7 @@
+id	role	family	split	verdict	reason	status	fin	ptok	ctok	ms	detail
+cd-de-ringbuf-fix-rotate-0	coding	repo-fix	dev	FAIL	ctx	400	0	-	-	82	0
+cd-de-ringbuf-fix-chunk-0	coding	repo-fix	dev	FAIL	ctx	400	0	-	-	332623	0
+cd-de-ringbuf-fix-window_sums-0	coding	repo-fix	dev	FAIL	ctx	400	0	-	-	192523	0
+cd-de-semver-fix-parse-0	coding	repo-fix	dev	FAIL	ctx	400	0	-	-	272657	0
+cd-de-semver-fix-compare-0	coding	repo-fix	dev	FAIL	ctx	400	0	-	-	304126	0
+cd-de-semver-fix-bump-0	coding	repo-fix	dev	FAIL	ctx	400	0	-	-	301784	0

@@ -1,0 +1,1 @@
+Task: Implement `rotate` in ringbuf/seq.py as its docstring describes (it currently raises NotImplementedError).

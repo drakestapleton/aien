@@ -1,6 +1,8 @@
 # Unseen-repository coding qualification harness (DRA-184)
 
-Status: IN_REVIEW. Results and labels are in `evidence/coding-qual/README.md`.
+Status: IN_REVIEW. Results and labels are in `evidence/coding-qual/README.md`:
+SYNTHETIC PASS (13 cases, 6/6 mutants, serve-path controls); REAL scenario invariants PASS (4/4);
+DRA-124 coding dev rows 0/12 (ctx 12) with the rung-10 ck60000 candidate; gated test line NOT_RUN.
 
 The harness runs one coding path end to end, with the own Omega LLM as the only model:
 

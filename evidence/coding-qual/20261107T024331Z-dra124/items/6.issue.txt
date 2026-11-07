@@ -1,0 +1,1 @@
+Task: Implement `window_sums` in ringbuf/seq.py as its docstring describes (it currently raises NotImplementedError).

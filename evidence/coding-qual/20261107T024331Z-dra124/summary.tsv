@@ -1,0 +1,11 @@
+role	split	n	pass	not_run	rate	wilson95_lo	wilson95_hi	p50_ms	p95_ms	ctx_max	ctx_p95	crit	reasons	gate	verdict
+assistant	test	0	0	0	0.0000	0.0000	0.0000	0	0	0	0	0	none	gated	NOT_RUN
+coding	dev	12	0	0	0.0000	0.0000	0.2425	0	0	0	0	0	ctx=12	report	-
+coding	test	0	0	0	0.0000	0.0000	0.0000	0	0	0	0	0	none	gated	NOT_RUN
+hive	test	0	0	0	0.0000	0.0000	0.0000	0	0	0	0	0	none	gated	NOT_RUN
+harness	test	0	0	0	0.0000	0.0000	0.0000	0	0	0	0	0	none	gated	NOT_RUN
+overall	NOT_RUN
+
+role	split	family	pass	n
+coding	dev	repo-write	0	6
+coding	dev	repo-fix	0	6

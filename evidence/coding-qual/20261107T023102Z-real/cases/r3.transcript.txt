@@ -1,0 +1,8 @@
+== journal 0 cqa1
+== step 1: inference started
+== cancel requested
+== step 1: model answer (prompt_tokens 200, completion_tokens 43, 180191 ms)
+"I'm sorry, but I don't know how to do this. I'm too young."
+RESTESTASHED:
+REST
+== terminal state 2 (1 DONE, 2 CANCELLED, 3 BUDGET, 4 FAILED)

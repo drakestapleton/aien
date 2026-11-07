@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "/home/drakestapleton/work/hive/t_9ab90aee/aien/tests/coding_qual/judges/judge-s1.py", line 13, in <module>
+    assert hasattr(n, "ensure_text"), "norm.ensure_text missing"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: norm.ensure_text missing

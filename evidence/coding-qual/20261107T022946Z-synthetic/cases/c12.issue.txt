@@ -1,0 +1,1 @@
+Rename the helper require_text in textkit/norm.py to ensure_text and update every caller (textkit/words.py). Behaviour and error messages must not change.

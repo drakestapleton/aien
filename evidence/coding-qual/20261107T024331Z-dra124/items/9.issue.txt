@@ -1,0 +1,1 @@
+Task: A user reports a bug in `compare` (semver/version.py): compare('1.10.0', '1.9.9') returns -1; versions must compare numerically. Fix the bug without changing the documented behaviour.

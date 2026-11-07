@@ -1,0 +1,7 @@
+id	role	family	split	verdict	reason	status	fin	ptok	ctok	ms	detail
+cd-de-ringbuf-write-rotate	coding	repo-write	dev	FAIL	ctx	400	0	-	-	210586	0
+cd-de-ringbuf-write-chunk	coding	repo-write	dev	FAIL	ctx	400	0	-	-	281605	0
+cd-de-ringbuf-write-window_sums	coding	repo-write	dev	FAIL	ctx	400	0	-	-	223304	0
+cd-de-semver-write-parse	coding	repo-write	dev	FAIL	ctx	400	0	-	-	301262	0
+cd-de-semver-write-compare	coding	repo-write	dev	FAIL	ctx	400	0	-	-	291042	0
+cd-de-semver-write-bump	coding	repo-write	dev	FAIL	ctx	400	0	-	-	306368	0

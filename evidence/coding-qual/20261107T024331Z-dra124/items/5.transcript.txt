@@ -1,0 +1,11 @@
+== journal 0 cqa1
+== step 1: inference started
+== step 1: model answer (prompt_tokens 249, completion_tokens 7, 32956 ms)
+"I'm sorry, D
+== step 1: action kind 0 (0 none 1 LIST 2 READ 3 WRITE 4 TEST 5 DONE) ok 1 (1 ok, 0 bad path, 2 not owned, 3 no block) path 
+== step 1: observation
+No action found. Reply with exactly one of: LIST | READ <path> | WRITE <path> then a ```python block with the whole file | TEST | DONE
+
+== step 2: inference started
+== step 2: inference failed reason 1 (1 ctx, 2 http, 3 conn, 4 json) status 400
+== terminal state 4 (1 DONE, 2 CANCELLED, 3 BUDGET, 4 FAILED)

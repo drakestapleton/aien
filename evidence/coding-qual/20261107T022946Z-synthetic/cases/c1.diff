@@ -1,0 +1,39 @@
+diff --git a/textkit/norm.py b/textkit/norm.py
+index 9d3e1d6..afe70eb 100644
+--- a/textkit/norm.py
++++ b/textkit/norm.py
+@@ -1,4 +1,4 @@
+-def require_text(name, value):
++def ensure_text(name, value):
+     """Raise TypeError naming the parameter when value is not a str; return value."""
+     if not isinstance(value, str):
+         raise TypeError(f"{name} must be a str, got {type(value).__name__}")
+diff --git a/textkit/words.py b/textkit/words.py
+index 21d6fa8..319107d 100644
+--- a/textkit/words.py
++++ b/textkit/words.py
+@@ -1,20 +1,20 @@
+-from .norm import require_text
++from .norm import ensure_text
+ 
+ 
+ def count_words(s):
+     """Number of whitespace-separated words in s."""
+-    require_text("s", s)
++    ensure_text("s", s)
+     return len(s.split())
+ 
+ 
+ def title_case(s):
+     """Every word with its first letter upper-cased and the rest lower-cased, single spaces."""
+-    require_text("s", s)
++    ensure_text("s", s)
+     return " ".join(w[:1].upper() + w[1:].lower() for w in s.split())
+ 
+ 
+ def truncate_words(s, n):
+     """The first n words of s joined by single spaces; all of them when s has n words or fewer."""
+-    require_text("s", s)
++    ensure_text("s", s)
+     words = s.split()
+     return " ".join(words[:n]) if len(words) > n else " ".join(words)

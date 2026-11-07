@@ -1,0 +1,1 @@
+Task: A user reports a bug in `chunk` (ringbuf/seq.py): chunk([1, 2, 3, 4, 5], 2) loses the final [5]. Fix the bug without changing the documented behaviour.

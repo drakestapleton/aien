@@ -1,0 +1,19 @@
+OUTER 2026-11-07T02:31:01Z probe api.openai.com 172.66.0.243
+CONNECT 172.66.0.243 443 REACHED
+outside_connect rc=0
+model ollm serve (aien-train main 0518c915dea370b3bffbb90d579b1daa5ba8b8f5, binary sha256 819664d5a2284189cd9baca67681675ed2b4685e19d1d976ce071b0f6fcaa5ea, omc e5b32567 2c824805) own Omega LLM rung-10 ck60000 sha256 a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f (T=256, d=384, 12 layers) tokenizer merges4096 OLLMTOK sha256 73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882; private netns port 18294; CPU only
+INNER 2026-11-07T02:31:01Z uid 1000 env ACCEPT ACCEPT_OMC ACCEPT_SUITE CK CQ_MAXTOK CQ_MODEL_ID CQ_RUN_ROOT CQ_SCRATCH CQ_SRV CQ_STEPS EGRESS_BIN EGRESS_ENV EGRESS_PROBE HOME LANG LC_ALL MERGES OMEGA_OMC PATH PROBE_IP PWD TERM TMPDIR TZ 
+netns-if lo 127.0.0.1/8
+netns-if lo ::1/128
+CONNECT 172.66.0.243 443 BLOCKED errno 101
+inside_connect rc=1
+hidden-check ls: cannot access '/home/drakestapleton/.hermes': No such file or directory
+hidden-check ls: cannot access '/home/drakestapleton/.codex': No such file or directory
+hidden-check ls: cannot access '/home/drakestapleton/.config/gh': No such file or directory
+PORT 18294
+GATE REAL PASS
+gate real rc=0
+accept sum rc 3
+GATE REAL RAN (dra124 dev; verdict in summary.tsv)
+gate dra124 rc=0
+INNER done 2026-11-07T03:10:26Z

@@ -1,0 +1,7 @@
+id	must_fail	build_rc	cqcase_rc	observed	verdict
+m1-no-ownership	c7	0	1	FAIL	KILLED
+m2-cancel-ignored	c3	0	1	FAIL	KILLED
+m3-reask-answered	c4	0	1	FAIL	KILLED
+m4-repeat-effect	c4	0	1	FAIL	KILLED
+m5-no-torn-cut	c13	0	1	FAIL	KILLED
+m6-dotdot-path	c10	0	1	FAIL	KILLED

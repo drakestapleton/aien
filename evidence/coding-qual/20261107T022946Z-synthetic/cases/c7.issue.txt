@@ -1,0 +1,1 @@
+The test suite fails: tests/test_words.py test_truncate_words. Find the bug in the code and fix it. Do not change the tests.

@@ -1,0 +1,10 @@
+diff --git a/textkit/words.py b/textkit/words.py
+index a782fc1..21d6fa8 100644
+--- a/textkit/words.py
++++ b/textkit/words.py
+@@ -17,4 +17,4 @@ def truncate_words(s, n):
+     """The first n words of s joined by single spaces; all of them when s has n words or fewer."""
+     require_text("s", s)
+     words = s.split()
+-    return " ".join(words[:n - 1]) if len(words) > n else " ".join(words)
++    return " ".join(words[:n]) if len(words) > n else " ".join(words)

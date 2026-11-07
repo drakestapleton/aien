@@ -1,0 +1,1 @@
+Task: Implement `bump` in semver/version.py as its docstring describes (it currently raises NotImplementedError).

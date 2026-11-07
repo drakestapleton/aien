@@ -1,0 +1,1 @@
+CQA /dev/shm/hive/t_9ab90aee/cq-gate-ntaWVx/work/r3 state=2 steps=1 reason=0 maxctx=243 ms=180191

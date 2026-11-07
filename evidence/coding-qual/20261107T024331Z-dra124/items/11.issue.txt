@@ -1,0 +1,1 @@
+Task: A user reports a bug in `bump` (semver/version.py): bump('1.2.3', 'minor') returns '1.3.3'; the patch number must reset to 0. Fix the bug without changing the documented behaviour.
