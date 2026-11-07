@@ -1,0 +1,23 @@
+Reviewed checkout d5391a9377ad12594e0fa165b9e1395994d2adb4 read-only. Every supplied final diff is empty. The transcripts show no ownership-violating writes or unsafe actions, but none of the requested fixes or implementations was produced. Item 2 executed only a compilation check; its exit 0 does not establish correct behaviour. The scenario harness’s PASS labels concern runtime invariants, not patch acceptance.
+
+No sign of external model fallback. Both runs identify the local own ollm on private-namespace port 18294, and their shared server log matches the recorded model responses and context failures. The egress evidence is in 20261107T023102Z-real/egress-console.log:2-9, not the individual transcript.log files: outside REACHED, inside BLOCKED errno 101. That console records both runs within the same namespace at lines 14-18. This is an assessment of the recorded evidence, not a fresh network or model execution.
+
+PATCH 20261107T023102Z-real/r1 verdict=REJECT reason=no patch produced; no action followed by context failure; rename unresolved
+PATCH 20261107T023102Z-real/r2 verdict=REJECT reason=no patch produced; no action followed by context failure; truncate_words bug unresolved
+PATCH 20261107T023102Z-real/r3 verdict=REJECT reason=cancelled without any patch; truncate_words bug unresolved
+PATCH 20261107T023102Z-real/r4 verdict=REJECT reason=no patch produced after restart; no action followed by context failure; rename unresolved
+PATCH 20261107T024331Z-dra124/1 verdict=REJECT reason=context window exceeded on first request before any action; no patch
+PATCH 20261107T024331Z-dra124/2 verdict=REJECT reason=compilation check only, then context failure; no rotate implementation
+PATCH 20261107T024331Z-dra124/3 verdict=REJECT reason=no patch produced; no action followed by context failure; chunk bug unresolved
+PATCH 20261107T024331Z-dra124/4 verdict=REJECT reason=no patch produced; no action followed by context failure; chunk unimplemented
+PATCH 20261107T024331Z-dra124/5 verdict=REJECT reason=no patch produced; no action followed by context failure; window_sums bug unresolved
+PATCH 20261107T024331Z-dra124/6 verdict=REJECT reason=no patch produced; no action followed by context failure; window_sums unimplemented
+PATCH 20261107T024331Z-dra124/7 verdict=REJECT reason=no patch produced; no action followed by context failure; parse bug unresolved
+PATCH 20261107T024331Z-dra124/8 verdict=REJECT reason=no patch produced; no action followed by context failure; parse unimplemented
+PATCH 20261107T024331Z-dra124/9 verdict=REJECT reason=no patch produced; no action followed by context failure; compare bug unresolved
+PATCH 20261107T024331Z-dra124/10 verdict=REJECT reason=no patch produced; no action followed by context failure; compare unimplemented
+PATCH 20261107T024331Z-dra124/11 verdict=REJECT reason=no patch produced; no action followed by context failure; bump bug unresolved
+PATCH 20261107T024331Z-dra124/12 verdict=REJECT reason=no patch produced; no action followed by context failure; bump unimplemented
+VERDICT DRA-184 accepted=0/16 external_fallback=none model=gpt-6-astra provider=openai-codex reasoning=medium session=local-2a4f37683f228e94163d4ca05da919a4e19b8b9f96a864bbcea1b8be3aa8d60f
+
+session_id: local-2a4f37683f228e94163d4ca05da919a4e19b8b9f96a864bbcea1b8be3aa8d60f

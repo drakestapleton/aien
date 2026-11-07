@@ -120,5 +120,11 @@ Measured from `serve.log`, covering both REAL runs (computed by Wolfram):
   `model-serve.log` instead.
 - `*.transcript.txt` files are derived by `tests/coding_qual/transcript.sh` from the journals,
   which stay the record.
-- Independent patch verdicts come from the Spark `reviewer` profile (Codex gpt-6-astra). They
-  are in `REVIEW-*.txt`, not in this file.
+- Independent patch verdicts come from the Spark `reviewer` profile (Codex gpt-6-astra, medium,
+  read-only brief `REVIEW-20261107.brief.sh`). Its output is `REVIEW-20261107.txt`: all 16 REAL
+  tasks are REJECT (no patch produced; item 2 ran only the build check), and the signed line is
+  `VERDICT DRA-184 accepted=0/16 external_fallback=none model=gpt-6-astra provider=openai-codex
+  reasoning=medium session=local-2a4f37683f228e94163d4ca05da919a4e19b8b9f96a864bbcea1b8be3aa8d60f`.
+  It reviewed checkout `d5391a93` and assessed the recorded evidence; it did not rerun anything.
+  The first attempt failed before any message was sent (`invalid_params`), because the worker's
+  `HERMES_*` environment leaked into the child `hermes`. The script now starts it with `env -i`.
