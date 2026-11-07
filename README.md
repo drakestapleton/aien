@@ -1,3 +1,5 @@
+> **Research. Not part of the SI alpha and not supported.** The supported path is [Sovereign Intelligence](https://github.com/aien-dev/sovereign-intelligence). Why this repository is outside it: [feature freeze, DRA-36](https://github.com/aien-dev/sovereign-intelligence/blob/main/notes/feature-freeze.md).
+
 # Aien
 
 Aien is the persistent subject that the AIEN system aims to sustain: one identity across the iMac, the Raspberry Pi, the DGX Spark and the MacBook (architecture ADR 0035). This repository is Aien's project home: mission, phase ledger (P0 to P7) and a plan for data contracts, evaluation harness, release manifests and the acceptance contract for the first qualified release, **Aien B0**.
