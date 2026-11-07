@@ -1,0 +1,7 @@
+id	must_fail	sed	what
+m1-no-ownership	c7	s/^if not cq_owned g v GACT get v VAPL$/if eq ulong 1 ulong 0/	WRITE to a file outside own.txt is no longer refused
+m2-cancel-ignored	c3	/^if eq cq_jfind g v 69 s 0$/{n;s/^if cq_hasx g v$/if eq ulong 1 ulong 0/}	a cancel that arrives during inference no longer stops the effect
+m3-reask-answered	c4	0,/^ro = cq_jfind g v 82 s$/s//ro = ulong 0/	resume asks the model again for steps that already have an answer
+m4-repeat-effect	c4	s/^if gt cq_jfind g v 68 s 0$/if eq ulong 1 ulong 0/	resume repeats a write that already has its D record
+m5-no-torn-cut	c13	s/^if ne k m$/if eq ulong 1 ulong 0/	a torn last journal line is not cut on restart
+m6-dotdot-path	c10	s/^if and eq c 46 eq d 46$/if eq ulong 1 ulong 0/	paths with .. are no longer refused

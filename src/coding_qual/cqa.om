@@ -1,0 +1,2092 @@
+note SPDX-License-Identifier: AGPL-3.0-or-later
+note cqa.om: the DRA-184 coding agent runtime. One task = one directory DIR holding
+note   issue.txt  the unfamiliar issue (free text, at most 8192 bytes)
+note   own.txt    the files the agent may change, one repository-relative path per line (ownership)
+note   test.txt   optional build/test command, one argv entry per line (absolute program path),
+note              run with the working directory DIR/repo, 20 s limit, output captured
+note   repo/      the isolated git worktree of the target repository at its pinned commit
+note   journal.log  append-only, fsync'd checkpoint written by this program (format below)
+note The agent loop: issue -> repository inspection (LIST, READ) -> patch (WRITE) -> build/test
+note (TEST; also run after every WRITE) -> DONE. Inference is one POST /v1/chat/completions per
+note step to 127.0.0.1:MPORT (the own Omega LLM, aien-train serve.om, DRA-119), temperature 0,
+note seed 1. serve.om ignores `tools` ("this model never calls tools"), so the agent speaks a
+note text protocol: the first line of the reply that starts with LIST, READ <path>,
+note WRITE <path> (then one fenced block holding the whole new file), TEST or DONE is the action.
+note No other model, provider or fallback exists in this program.
+note
+note Journal records, one line each, fields separated by one space, hex fields lowercase ("-" empty):
+note   J 0 cqa1                          header
+note   I s 0                             inference for step s started
+note   R s pt ct ms hex(content)         its answer (prompt and completion tokens, wall ms)
+note   N s reason status                 inference failed: reason 1 ctx, 2 http, 3 conn, 4 json
+note   A s kind ok hex(path)             parsed action: kind 0 none, 1 LIST, 2 READ, 3 WRITE, 4 TEST,
+note                                     5 DONE; ok 0 refused (bad path, not owned, no block)
+note   E s hex(path)                     write intent (step s)
+note   D s len fnv64                     write done: length and FNV-1a 64 of the new file
+note   O s hex(observation)              what the agent was told after step s
+note   X 0 0                             cancel request (appended by `cqa cancel`)
+note   T 0 state                         terminal: 1 DONE, 2 CANCELLED, 3 BUDGET, 4 FAILED
+note Recovery on every run: a torn last line is cut; a T ends the task; a step with R is never
+note asked again (its answer is replayed into the history); an X before a step's E cancels it;
+note an E without D repeats the idempotent full-file write (temporary file + rename) once.
+note
+note Commands:
+note   cqa task DIR MPORT [steps=N] [maxtok=N] [crash=R|E|W]   run or resume; prints CQA lines
+note   cqa cancel DIR                                         append X
+note   cqa serve PORT MPORT WORK [steps=N] [maxtok=N] [max=K] endpoint for the frozen DRA-124
+note        suite runner (accept.om): each POST /v1/chat/completions carrying a DRA-124 coding item
+note        becomes task WORK/<k> (files from the prompt, git commit, owned = the named target),
+note        runs the agent loop, and answers with the target file in one python block; a
+note        context failure is answered 400 context_length_exceeded like serve.om.
+note crash=R|E|W (tests only): exit 77 right after the first R, after the first E, or after the
+note first file write before its D.
+note Compose: { printf 'om2\n'; cat vendor/json.om vendor/jsonw.om vendor/http.om vendor/notls.om
+note   ../runtime_path/rpcom.om cqa.om; } | omc > cqa   (tests/coding_qual/build.sh)
+
+const GDIR ulong 0
+const GP ulong 1024
+const GP2 ulong 2560
+const GISS ulong 4096
+const GOWN ulong 12288
+const GTST ulong 16384
+const GACT ulong 20480
+const GJB ulong 65536
+const GJCAP ulong 1048576
+const GOBS ulong 1114112
+const GCON ulong 1179648
+const GFIL ulong 1245184
+const GFCAP ulong 262144
+const GN ulong 1507328
+const OBSCAP ulong 3000
+const FILCAP ulong 3000
+
+const VDL ulong 0
+const VMP ulong 1
+const VSTP ulong 2
+const VMAXT ulong 3
+const VCRSH ulong 4
+const VISS ulong 5
+const VOWN ulong 6
+const VTST ulong 7
+const VJL ulong 8
+const VCON ulong 9
+const VOBS ulong 10
+const VKIND ulong 11
+const VOK ulong 12
+const VAPL ulong 13
+const VWS ulong 14
+const VWL ulong 15
+const VPT ulong 16
+const VCT ulong 17
+const VMS ulong 18
+const VRSN ulong 19
+const VHST ulong 20
+const VTERM ulong 21
+const VSTEP ulong 22
+const VMXP ulong 23
+const VMXC ulong 24
+const VTMS ulong 25
+const VRL ulong 26
+const VFL ulong 27
+const VMAX ulong 28
+const VK ulong 29
+const VNC ulong 40
+const VN0 ulong 41
+const GWRK ulong 24576
+
+text tjrn "/journal.log"
+text tiss "/issue.txt"
+text town "/own.txt"
+text ttst "/test.txt"
+text trepo "/repo"
+text trepos "/repo/"
+text ttout "/test.out"
+text tlout "/list.out"
+text ttmp "/.cqa-tmp"
+text tjhdr "J 0 cqa1\n"
+text ttask "task"
+text tcanc "cancel"
+text tserv "serve"
+text tstp "steps="
+text tmxt "maxtok="
+text tcrs "crash="
+text tmax "max="
+text tpost "POST"
+text tget "GET"
+text tchat "/v1/chat/completions"
+text thlth "/health"
+text thost "Host"
+text tloc "127.0.0.1"
+text tctype "Content-Type"
+text tjson "application/json"
+text kmodel "model"
+text vmodel "ollm"
+text kmaxt "max_tokens"
+text ktemp "temperature"
+text kseed "seed"
+text kstrm "stream"
+text vzero "0"
+text vone "1"
+text kmsgs "messages"
+text krole "role"
+text kcont "content"
+text vsys "system"
+text vuser "user"
+text vasst "assistant"
+text kchoi "choices"
+text kmsg "message"
+text kusage "usage"
+text kpt "prompt_tokens"
+text kct "completion_tokens"
+text ktt "total_tokens"
+text kfin "finish_reason"
+text vstop "stop"
+text kindex "index"
+text kid "id"
+text kobj "object"
+text vcc "chat.completion"
+text kcrt "created"
+text vcqa "cqa-agent"
+text kerr "error"
+text ktype "type"
+text vinv "invalid_request_error"
+text kparam "param"
+text kcode "code"
+text ectx "context_length_exceeded"
+text ectxm "the agent's own-model context window was exceeded (context_length_exceeded)"
+text efail "the agent's own-model inference failed"
+text tsys "You are a coding agent working in an unfamiliar git repository. Each reply starts with exactly one action line: LIST (list files), READ <path>, WRITE <path> followed by one ```python block holding the whole new file, TEST (run the tests), or DONE.\n"
+text tiss0 "Issue:\n"
+text town0 "\nYou may change only: "
+text tsep ", "
+text tnl "\n"
+text tsp " "
+text kwlist "LIST"
+text kwread "READ "
+text kwwrit "WRITE "
+text kwtest "TEST"
+text kwdone "DONE"
+text tfence "```"
+text onone "No action found. Reply with exactly one of: LIST | READ <path> | WRITE <path> then a ```python block with the whole file | TEST | DONE\n"
+text ofiles "Files:\n"
+text obadp "refused: invalid path\n"
+text oown "refused: you may not change "
+text oblk "refused: WRITE needs one complete ``` block\n"
+text onof "no such file: "
+text ocolon ":\n"
+text owrote "wrote "
+text obytes " bytes\n"
+text otests "tests: exit "
+text otnone "tests: none configured\n"
+text otmo "tests: timeout after 20 s\n"
+text ocut "\n[output cut]\n"
+text odone "done\n"
+text tgit "/usr/bin/git"
+text tgc "-C"
+text tlsf "ls-files"
+text tinit "init"
+text tqq "-q"
+text tadd "add"
+text tall "-A"
+text tcfg "-c"
+text tuname "user.name=cqa"
+text tumail "user.email=cqa@invalid"
+text tcomit "commit"
+text tmm "-m"
+text tbase "base"
+text trevp "rev-parse"
+text thead "HEAD"
+text tbsf "/base.txt"
+text titem "/item.txt"
+text treply "/reply.txt"
+text hitem "X-Accept-Item"
+text tsec "### "
+text tpyo "```python\n"
+text ttask0 "\nTask: "
+text treply0 "\n\nReply with"
+text tcnew "complete new content of "
+text tinone " in one"
+text tbwrap "/usr/bin/bwrap"
+text tpy "/usr/bin/python3"
+text tcqa "CQA "
+text tusage "cqa: usage: task DIR MPORT [steps=N] [maxtok=N] [crash=R|E|W] | cancel DIR | serve PORT MPORT WORK [steps=N] [maxtok=N] [max=K]\n"
+text tport "PORT "
+text tst " state="
+text tsteps " steps="
+text trsn " reason="
+text thst " status="
+text tmxc " maxctx="
+text tms " ms="
+text tsta "STEP "
+text tdirs "/"
+text tqk "X 0 "
+text tubw1 "--unshare-all\n--die-with-parent\n--ro-bind\n/\n/\n--dev\n/dev\n--proc\n/proc\n--tmpfs\n/tmp\n--ro-bind"
+text tubw2 "--chdir"
+text tubw3 "--"
+text tpyc "-B\n-c\nimport sys;[compile(open(p).read(),p,'exec') for p in sys.argv[1:]]"
+text tnull "/dev/null"
+text tgout "/git.out"
+
+global pk uchar 4096
+global pkn ulong 2
+
+note ======== packets and processes (execprog list: u16 count, u16-length records) ========
+
+fn pk_reset to void
+put pkn 0 2
+put pkn 1 0
+put pk 0 0
+put pk 1 0
+end
+
+fn pk_add a view uchar * to void
+n = get pkn 0
+m = len a
+if gt add add n 2 m 4096
+trap 3
+end
+put pk n uchar and m 255
+put pk add n 1 uchar shr m 8
+for i ulong m
+put pk add add n 2 i get a i
+end
+put pkn 0 add add n 2 m
+c = add get pkn 1 1
+put pkn 1 c
+put pk 0 uchar and c 255
+put pk 1 uchar shr c 8
+end
+
+note cq_wait: exit status of pid (1000 + signal when killed); limit ms > 0 kills it with SIGKILL
+note after that many milliseconds and returns 2000.
+fn cq_wait pid long limit ulong to long
+st = new uchar 4 0
+k = ulong 0
+while true bound 999999
+r = waitpid int pid st 0 4 1
+if lt r 0
+ret r
+end
+if gt r 0
+s = or or ulong get st 0 shl ulong get st 1 8 shl ulong get st 2 16
+if eq and s 127 0
+ret long and shr s 8 255
+end
+ret long add 1000 and s 127
+end
+if and gt limit 0 ge mul k 20 limit
+x = killpid int pid 9
+r2 = waitpid int pid st 0 4 0
+ret 2000
+end
+z = sleepns 20000000
+k = add k 1
+end
+ret -4
+end
+
+note ======== context: g byte regions (see GDIR..GFIL), v numbers (VDL..VFL) ========
+
+note cq_path: DIR + s into g[GP, ...); its length.
+fn cq_path g edit uchar 1507328 v edit ulong 64 s view uchar * to ulong
+p = cq_copy g GP add GP 1536 GDIR get v VDL
+p = cq_put g p add GP 1536 s
+ret sub p GP
+end
+
+note cq_rpath: DIR/repo/ + g[o, o + n) into g[GP2, ...); its length.
+fn cq_rpath g edit uchar 1507328 v edit ulong 64 o ulong n ulong to ulong
+p = cq_copy g GP2 add GP2 1536 GDIR get v VDL
+p = cq_put g p add GP2 1536 trepos
+p = cq_copy g p add GP2 1536 o n
+ret sub p GP2
+end
+
+note cq_rdg: the file at path g[po, po + pn) into g[dst, dst + cap); its length, a negative
+note errno, or -27 when it does not fit.
+fn cq_rdg g edit uchar 1507328 po ulong pn ulong dst ulong cap ulong to long
+fd = fopen g po pn 524288 0
+if lt fd 0
+ret fd
+end
+o = ulong 0
+for i ulong 16777216
+if ge o cap
+c = fclose int fd
+ret -27
+end
+r = read int fd g add dst o sub cap o
+if lt r 0
+c = fclose int fd
+ret r
+end
+if eq r 0
+break
+end
+o = add o ulong r
+end
+c = fclose int fd
+ret long o
+end
+
+note cq_fnv: FNV-1a 64 of s.
+fn cq_fnv s view uchar * to ulong
+h = ulong 14695981039346656037
+for i ulong len s
+h = mul xor h ulong get s i 1099511628211
+end
+ret h
+end
+
+note ======== journal ========
+
+note cq_jload: the journal into g[GJB, ...), cutting a torn tail; creates it with the header.
+fn cq_jload g edit uchar 1507328 v edit ulong 64 to long
+pl = cq_path g v tjrn
+n = cq_rdg g GP pl GJB GJCAP
+if eq n -2
+r = rc_append view part g GP pl tjhdr len tjhdr
+if lt r 0
+ret r
+end
+n = cq_rdg g GP pl GJB GJCAP
+end
+if lt n 0
+ret n
+end
+m = ulong n
+k = m
+while gt k 0 bound 1048577
+if eq get g add GJB sub k 1 10
+break
+end
+k = sub k 1
+end
+if ne k m
+r = truncate g GP pl long k
+if lt r 0
+ret r
+end
+end
+put v VJL k
+ret 0
+end
+
+note cq_japp: append line lb[0, n) to the journal (durable) and to the loaded copy.
+fn cq_japp g edit uchar 1507328 v edit ulong 64 lb view uchar * n ulong to long
+pl = cq_path g v tjrn
+r = rc_append view part g GP pl lb n
+if lt r 0
+trap 13
+end
+j = get v VJL
+if gt add j n GJCAP
+trap 13
+end
+for i ulong n
+put g add add GJB j i get lb i
+end
+put v VJL add j n
+ret 0
+end
+
+note cq_jfind: offset (in g) of the first record "K s ..." for step s, or 0 when absent.
+fn cq_jfind g edit uchar 1507328 v edit ulong 64 k uchar s ulong to ulong
+nd = new uchar 32 0
+p = rc_byte nd 0 10
+p = rc_byte nd p k
+p = rc_byte nd p 32
+p = rc_dec nd p s
+p = rc_byte nd p 32
+e = add GJB get v VJL
+i = rc_find view part g 0 e GJB e view part nd 0 p
+if ge i e
+ret 0
+end
+ret add i 1
+end
+
+note cq_fld: field f (0 = the kind letter) of the record at offset o: start << 32 | length.
+fn cq_fld g edit uchar 1507328 v edit ulong 64 o ulong f ulong to ulong
+e = add GJB get v VJL
+p = o
+k = ulong 0
+while lt p e bound 1048577
+if eq k f
+q = p
+while lt q e bound 1048577
+c = get g q
+if or eq c 32 eq c 10
+break
+end
+q = add q 1
+end
+ret or shl p 32 sub q p
+end
+c = get g p
+if eq c 10
+ret 0
+end
+if eq c 32
+k = add k 1
+end
+p = add p 1
+end
+ret 0
+end
+
+fn cq_fnum g edit uchar 1507328 v edit ulong 64 o ulong f ulong to ulong
+z = cq_fld g v o f
+ret rc_num view part g 0 GN shr z 32 and z 4294967295
+end
+
+note cq_fhex: hex field f of the record at o decoded into g[dst, dst + cap); its length (-1 bad).
+fn cq_fhex g edit uchar 1507328 v edit ulong 64 o ulong f ulong dst ulong cap ulong to long
+z = cq_fld g v o f
+ret cq_unhex g shr z 32 and z 4294967295 dst cap
+end
+
+fn cq_unhex g edit uchar 1507328 off ulong n ulong dst ulong cap ulong to long
+if and eq n 1 eq get g off 45
+ret 0
+end
+if or eq n 0 ne rem n 2 0
+ret -1
+end
+m = div n 2
+if gt m cap
+ret -1
+end
+for i ulong m
+a = rc_hexv get g add off mul i 2
+b = rc_hexv get g add add off mul i 2 1
+if or gt a 15 gt b 15
+ret -1
+end
+put g add dst i uchar or shl a 4 b
+end
+ret long m
+end
+
+note cq_rec3: append "K s a b\n".
+fn cq_rec3 g edit uchar 1507328 v edit ulong 64 k uchar s ulong a ulong b ulong to void
+lb = new uchar 96 0
+p = rc_byte lb 0 k
+p = rc_byte lb p 32
+p = rc_dec lb p s
+p = rc_byte lb p 32
+p = rc_dec lb p a
+p = rc_byte lb p 32
+p = rc_dec lb p b
+p = rc_byte lb p 10
+x = cq_japp g v lb p
+end
+
+fn cq_rec2 g edit uchar 1507328 v edit ulong 64 k uchar s ulong a ulong to void
+lb = new uchar 64 0
+p = rc_byte lb 0 k
+p = rc_byte lb p 32
+p = rc_dec lb p s
+p = rc_byte lb p 32
+p = rc_dec lb p a
+p = rc_byte lb p 10
+x = cq_japp g v lb p
+end
+
+note cq_rech: append "K s [nums...] hex(g[off, off + n))\n" with v VNC numbers (v VN0 ..) first.
+fn cq_rech g edit uchar 1507328 v edit ulong 64 k uchar s ulong off ulong n ulong to void
+lb = new uchar 140000 0
+p = rc_byte lb 0 k
+p = rc_byte lb p 32
+p = rc_dec lb p s
+for i ulong get v VNC bound 4
+p = rc_byte lb p 32
+p = rc_dec lb p get v add VN0 i
+end
+p = rc_byte lb p 32
+if gt n 65536
+trap 3
+end
+p = rc_hex lb p view part g off n
+p = rc_byte lb p 10
+x = cq_japp g v lb p
+end
+
+note ======== text helpers on g ========
+
+note cq_put: t copied into g at p (bounded by lim); the new end.
+fn cq_put g edit uchar 1507328 p ulong lim ulong t view uchar * to ulong
+q = p
+for i ulong len t
+if ge q lim
+ret q
+end
+put g q get t i
+q = add q 1
+end
+ret q
+end
+
+fn cq_putd g edit uchar 1507328 p ulong lim ulong x ulong to ulong
+d = new uchar 24 0
+n = rc_dec d 0 x
+ret cq_put g p lim view part d 0 n
+end
+
+note cq_copy: g[s, s + n) to g[p, ...) bounded by lim; the new end.
+fn cq_copy g edit uchar 1507328 p ulong lim ulong s ulong n ulong to ulong
+q = p
+for i ulong n
+if ge q lim
+ret q
+end
+put g q get g add s i
+q = add q 1
+end
+ret q
+end
+
+note cq_lend: end of the line starting at p within [p, e).
+fn cq_lend g edit uchar 1507328 p ulong e ulong to ulong
+q = p
+while lt q e bound 16777217
+if eq get g q 10
+ret q
+end
+q = add q 1
+end
+ret e
+end
+
+note cq_okpc: c is allowed in a repository path.
+fn cq_okpc c uchar to bool
+if and ge c 97 le c 122
+ret true
+end
+if and ge c 65 le c 90
+ret true
+end
+if and ge c 48 le c 57
+ret true
+end
+if or or eq c 46 eq c 95 or eq c 45 eq c 47
+ret true
+end
+ret false
+end
+
+note cq_okpath: g[o, o + n) is a safe relative path: 1..200 allowed bytes, no leading /, no "..",
+note no ".git" component start, no "//".
+fn cq_okpath g edit uchar 1507328 o ulong n ulong to bool
+if or eq n 0 gt n 200
+ret false
+end
+if eq get g o 47
+ret false
+end
+for i ulong n
+c = get g add o i
+if not cq_okpc c
+ret false
+end
+if lt add i 1 n
+d = get g add add o i 1
+if and eq c 46 eq d 46
+ret false
+end
+if and eq c 47 eq d 47
+ret false
+end
+end
+end
+if cq_isgit g o n
+ret false
+end
+ret true
+end
+
+fn cq_isgit g edit uchar 1507328 o ulong n ulong to bool
+if lt n 4
+ret false
+end
+if and eq get g o 46 eq get g add o 1 103
+if and eq get g add o 2 105 eq get g add o 3 116
+ret true
+end
+end
+ret false
+end
+
+note cq_owned: g[o, o + n) equals one line of own.txt.
+fn cq_owned g edit uchar 1507328 v edit ulong 64 o ulong n ulong to bool
+p = GOWN
+e = add GOWN get v VOWN
+while lt p e bound 4097
+q = cq_lend g p e
+if eq sub q p n
+if cq_eqg g p o n
+ret true
+end
+end
+p = add q 1
+end
+ret false
+end
+
+fn cq_eqg g edit uchar 1507328 a ulong b ulong n ulong to bool
+for i ulong n
+if ne get g add a i get g add b i
+ret false
+end
+end
+ret true
+end
+
+note ======== action parsing (deterministic from the answer in g[GCON, GCON + v VCON)) ========
+
+fn cq_kw g edit uchar 1507328 p ulong e ulong t view uchar * to bool
+if gt add p len t e
+ret false
+end
+for i ulong len t
+if ne get g add p i get t i
+ret false
+end
+end
+ret true
+end
+
+note cq_trim: the end of g[p, q) without trailing spaces, tabs, CR and backticks.
+fn cq_trim g edit uchar 1507328 p ulong q ulong to ulong
+r = q
+while gt r p bound 65537
+c = get g sub r 1
+if or or eq c 32 eq c 9 or eq c 13 eq c 96
+r = sub r 1
+else
+break
+end
+end
+ret r
+end
+
+note cq_parse: sets v VKIND, VOK, VAPL (path in g[GACT, ...)), VWS / VWL (WRITE content span).
+fn cq_parse g edit uchar 1507328 v edit ulong 64 to void
+put v VKIND 0
+put v VOK 1
+put v VAPL 0
+put v VWS 0
+put v VWL 0
+e = add GCON get v VCON
+p = GCON
+while lt p e bound 65537
+q = cq_lend g p e
+s = p
+while lt s q bound 65537
+c = get g s
+if or or eq c 32 eq c 9 or eq c 42 eq c 96
+s = add s 1
+else
+break
+end
+end
+k = cq_kind g s q
+if gt k 0
+put v VKIND k
+cq_parg g v k s q e
+ret
+end
+p = add q 1
+end
+end
+
+fn cq_kind g edit uchar 1507328 s ulong q ulong to ulong
+if cq_kw g s q kwlist
+ret 1
+end
+if cq_kw g s q kwread
+ret 2
+end
+if cq_kw g s q kwwrit
+ret 3
+end
+if cq_kw g s q kwtest
+ret 4
+end
+if cq_kw g s q kwdone
+ret 5
+end
+ret 0
+end
+
+note cq_parg: the path of READ / WRITE and the block of WRITE.
+fn cq_parg g edit uchar 1507328 v edit ulong 64 k ulong s ulong q ulong e ulong to void
+if or eq k 2 eq k 3
+a = add s 5
+if eq k 3
+a = add s 6
+end
+while lt a q bound 65537
+if eq get g a 32
+a = add a 1
+else
+break
+end
+end
+b = cq_trim g a q
+n = sub b a
+if gt n 200
+n = 200
+end
+x = cq_copy g GACT add GACT 200 a n
+put v VAPL n
+if not cq_okpath g GACT n
+put v VOK 0
+ret
+end
+if eq k 3
+cq_pblk g v q e
+end
+end
+end
+
+note cq_pblk: WRITE content: after the action line, the first ``` line opens, the next ``` (anywhere,
+note as DRA-124 prompts close a file without a final newline) closes; the bytes in between are the file.
+fn cq_pblk g edit uchar 1507328 v edit ulong 64 q ulong e ulong to void
+if not cq_owned g v GACT get v VAPL
+put v VOK 2
+ret
+end
+f = rc_find view part g 0 e q e tfence
+if ge f e
+put v VOK 3
+ret
+end
+cs = cq_lend g f e
+if ge cs e
+put v VOK 3
+ret
+end
+cs = add cs 1
+z = rc_find view part g 0 e cs e tfence
+if ge z e
+put v VOK 3
+ret
+end
+put v VWS cs
+put v VWL sub z cs
+end
+
+note ======== inference ========
+
+fn cq_kv ob edit uchar * k view uchar * v view uchar * to void
+js_wsbuf ob k 0 len k
+js_wsbuf ob v 0 len v
+end
+
+fn cq_mem src view uchar * tp view uint 65552 o ulong key view uchar * to ulong
+if eq o jsnone
+ret jsnone
+end
+if ne js_type tp o jsobj
+ret jsnone
+end
+k = js_first tp o
+for i ulong 16384
+if eq k jsnone
+ret jsnone
+end
+if js_streq src js_off tp k key
+ret add k 1
+end
+k = js_mnext tp k
+end
+ret jsnone
+end
+
+note cq_user0: the first user message (issue + owned files) into g[GFIL, ...); its length.
+fn cq_user0 g edit uchar 1507328 v edit ulong 64 to ulong
+lim = add GFIL GFCAP
+p = cq_put g GFIL lim tiss0
+p = cq_copy g p lim GISS get v VISS
+p = cq_put g p lim town0
+s = GOWN
+e = add GOWN get v VOWN
+first = true
+while lt s e bound 4097
+q = cq_lend g s e
+if gt q s
+if not first
+p = cq_put g p lim tsep
+end
+p = cq_copy g p lim s sub q s
+first = false
+end
+s = add q 1
+end
+p = cq_put g p lim tnl
+ret sub p GFIL
+end
+
+note cq_hist: the message for step t: which 0 the assistant answer (R), 1 the observation (O),
+note decoded into g[GFIL, ...); its length, 0 when absent.
+fn cq_hist g edit uchar 1507328 v edit ulong 64 t ulong which ulong to ulong
+k = uchar 82
+f = ulong 5
+if eq which 1
+k = uchar 79
+f = 2
+end
+o = cq_jfind g v k t
+if eq o 0
+ret 0
+end
+n = cq_fhex g v o f GFIL 65536
+if lt n 0
+ret 0
+end
+ret ulong n
+end
+
+note cq_body: the chat request for step s into ob; its length or a negative writer result.
+fn cq_body g edit uchar 1507328 v edit ulong 64 ob edit uchar 132096 s ulong to long
+r = js_winit ob
+js_wobj ob
+cq_kv ob kmodel vmodel
+js_wsbuf ob kmaxt 0 len kmaxt
+js_wulong ob get v VMAXT
+js_wsbuf ob ktemp 0 len ktemp
+js_wnumb ob vzero 0 len vzero
+js_wsbuf ob kseed 0 len kseed
+js_wulong ob 1
+js_wsbuf ob kstrm 0 len kstrm
+js_wbool ob false
+js_wsbuf ob kmsgs 0 len kmsgs
+js_warr ob
+js_wobj ob
+cq_kv ob krole vsys
+cq_kv ob kcont tsys
+js_wobje ob
+n = cq_user0 g v
+js_wobj ob
+cq_kv ob krole vuser
+js_wsbuf ob kcont 0 len kcont
+js_wsbuf ob g GFIL n
+js_wobje ob
+for t ulong sub s 1 bound 64
+cq_hmsg g v ob add t 1
+end
+js_warre ob
+js_wobje ob
+ret js_wdone ob
+end
+
+fn cq_hmsg g edit uchar 1507328 v edit ulong 64 ob edit uchar 132096 t ulong to void
+n = cq_hist g v t 0
+js_wobj ob
+cq_kv ob krole vasst
+js_wsbuf ob kcont 0 len kcont
+js_wsbuf ob g GFIL n
+js_wobje ob
+m = cq_hist g v t 1
+js_wobj ob
+cq_kv ob krole vuser
+js_wsbuf ob kcont 0 len kcont
+js_wsbuf ob g GFIL m
+js_wobje ob
+end
+
+note cq_post: POST ob's JSON to 127.0.0.1:MPORT; the status with the body in d (length v VRL),
+note or a negative result.
+fn cq_post v edit ulong 64 ob edit uchar 132096 wl ulong d edit uchar 262144 to long
+a = new uchar 16 0
+r = haddr4 a 2130706433 get v VMP
+fd = hdial a 30000000000
+if lt fd 0
+ret fd
+end
+cs = new ulong 320 0
+io = new uchar 131072 0
+r = hinit cs io int fd 0
+if lt r 0
+x = hclose cs
+ret r
+end
+hsettmo cs 3600000000000 3600000000000
+hsetbdl cs 3600000000000
+put cs HKEEP 0
+r = hreqst cs io tpost
+r = hfe r hreqtg cs io tchat
+r = hfe r hhname cs io thost
+r = hfe r hhval cs io tloc
+r = hfe r hhname cs io tctype
+r = hfe r hhval cs io tjson
+r = hfe r hhend cs io 0 wl
+r = hfe r hput cs io view part ob 1040 wl
+r = hfe r hwfin cs io
+if lt r 0
+x = hclose cs
+ret r
+end
+st = hrsprd cs io
+if lt st 0
+x = hclose cs
+ret st
+end
+n = hbodyall cs io d
+x = hclose cs
+if lt n 0
+ret n
+end
+put v VRL ulong n
+ret st
+end
+
+note cq_infer: one inference for step s. 0 with the answer in g[GCON, ...) (v VCON, VPT, VCT,
+note VMS), else the failure reason (1 ctx, 2 http with v VHST, 3 conn, 4 json).
+fn cq_infer g edit uchar 1507328 v edit ulong 64 s ulong to ulong
+ob = new uchar 132096 0
+wl = cq_body g v ob s
+if lt wl 0
+ret 4
+end
+d = new uchar 262144 0
+t0 = monons
+st = cq_post v ob ulong wl d
+put v VMS div ulong sub monons t0 1000000
+put v VHST 0
+if lt st 0
+ret 3
+end
+put v VHST ulong st
+if ne st 200
+i = rc_find view part d 0 get v VRL 0 get v VRL ectx
+if lt i get v VRL
+ret 1
+end
+ret 2
+end
+ret cq_parse_r g v view part d 0 get v VRL
+end
+
+fn cq_parse_r g edit uchar 1507328 v edit ulong 64 d view uchar * to ulong
+tp = new uint 65552 0
+r = js_init tp 262144 64
+k = js_parse d tp len d
+if lt k 0
+ret 4
+end
+ch = cq_mem d tp 0 kchoi
+if eq ch jsnone
+ret 4
+end
+if ne js_type tp ch jsarr
+ret 4
+end
+msg = cq_mem d tp js_first tp ch kmsg
+ct = cq_mem d tp msg kcont
+put v VCON 0
+if ne ct jsnone
+if eq js_type tp ct jsstr
+cn = js_sget d js_off tp ct part g GCON 65536
+if lt cn 0
+ret 4
+end
+put v VCON ulong cn
+end
+end
+us = cq_mem d tp 0 kusage
+put v VPT cq_unum d tp us kpt
+put v VCT cq_unum d tp us kct
+ret 0
+end
+
+fn cq_unum d view uchar * tp view uint 65552 us ulong k view uchar * to ulong
+t = cq_mem d tp us k
+if eq t jsnone
+ret 0
+end
+if ne js_type tp t jsnum
+ret 0
+end
+if not js_isu d js_off tp t
+ret 0
+end
+ret js_tou d js_off tp t
+end
+
+note ======== effects and observations ========
+
+note cq_wfile: the idempotent write of WRITE content to repo/<path>: temporary file, fsync,
+note rename over the target. Creates missing parent directories. 0 or a negative result.
+fn cq_wfile g edit uchar 1507328 v edit ulong 64 to long
+n = cq_rpath g v GACT get v VAPL
+cq_mkpar g n
+tp = cq_path g v ttmp
+fd = fopen g GP tp 524865 420
+if lt fd 0
+ret fd
+end
+r = rc_wall int fd view part g get v VWS get v VWL get v VWL
+if lt r 0
+c = fclose int fd
+ret r
+end
+r = fsync int fd
+c = fclose int fd
+if lt r 0
+ret r
+end
+pk_reset
+pk_add view part g GP tp
+pk_add view part g GP2 n
+ret renames pk 0 get pkn 0 0
+end
+
+note cq_mkpar: create each missing parent directory of the path g[GP2, GP2 + n).
+fn cq_mkpar g edit uchar 1507328 n ulong to void
+for i ulong n bound 1536
+if eq get g add GP2 i 47
+if gt i 0
+r = makedir g GP2 i 493
+end
+end
+end
+end
+
+note cq_spawn: fork; the child changes to directory g[co, co + cn) (when cn > 0), sends stdout
+note and stderr to the file g[oo, oo + on) (created, truncated) and execs the packet pk. The pid
+note or a negative result. execprog gives the child an empty environment.
+fn cq_spawn g edit uchar 1507328 co ulong cn ulong oo ulong on ulong to long
+pid = fork
+if lt pid 0
+ret pid
+end
+if eq pid 0
+if gt cn 0
+z = chdir g co cn
+if lt z 0
+exit 126
+end
+end
+fd = fopen g oo on 524865 384
+if ge fd 0
+d = dupfd int fd 1 0
+d = dupfd int fd 2 0
+end
+r = execprog pk 0 get pkn 0
+exit 127
+end
+ret pid
+end
+
+note cq_runout: run the packet pk with cwd DIR/repo and output into DIR/<of>, killed after lim ms;
+note the output is read into g[GFIL, ...) (length v VRL). The exit status, 2000 on timeout.
+fn cq_runout g edit uchar 1507328 v edit ulong 64 of view uchar * lim ulong to long
+rp = cq_path g v trepo
+for i ulong rp
+put g add GP2 i get g add GP i
+end
+op = cq_path g v of
+pid = cq_spawn g GP2 rp GP op
+put v VRL 0
+if lt pid 0
+ret pid
+end
+rc = cq_wait pid lim
+op = cq_path g v of
+n = cq_rdg g GP op GFIL GFCAP
+if gt n 0
+put v VRL ulong n
+end
+ret rc
+end
+
+note cq_obsout: the first cap bytes of g[GFIL, GFIL + n) onto the observation.
+fn cq_obsout g edit uchar 1507328 v edit ulong 64 n ulong cap ulong to void
+m = n
+if gt m cap
+m = cap
+end
+p = cq_copy g add GOBS get v VOBS add GOBS 65536 GFIL m
+if gt n cap
+p = cq_put g p add GOBS 65536 ocut
+end
+put v VOBS sub p GOBS
+end
+
+fn cq_oput g edit uchar 1507328 v edit ulong 64 t view uchar * to void
+put v VOBS sub cq_put g add GOBS get v VOBS add GOBS 65536 t GOBS
+end
+
+fn cq_ocopy g edit uchar 1507328 v edit ulong 64 s ulong n ulong to void
+put v VOBS sub cq_copy g add GOBS get v VOBS add GOBS 65536 s n GOBS
+end
+
+fn cq_odec g edit uchar 1507328 v edit ulong 64 x ulong to void
+put v VOBS sub cq_putd g add GOBS get v VOBS add GOBS 65536 x GOBS
+end
+
+note cq_tests: the build/test observation from test.txt (argv lines).
+fn cq_tests g edit uchar 1507328 v edit ulong 64 to void
+if eq get v VTST 0
+cq_oput g v otnone
+ret
+end
+pk_reset
+s = GTST
+e = add GTST get v VTST
+while lt s e bound 4097
+q = cq_lend g s e
+if gt q s
+pk_add view part g s sub q s
+end
+s = add q 1
+end
+rc = cq_runout g v ttout 20000
+if eq rc 2000
+cq_oput g v otmo
+ret
+end
+cq_oput g v otests
+x = rc
+if lt x 0
+x = add 9000 neg x
+end
+cq_odec g v ulong x
+cq_oput g v tnl
+cq_obsout g v get v VRL 2000
+end
+
+note cq_list: `git -C repo ls-files`.
+fn cq_list g edit uchar 1507328 v edit ulong 64 to void
+cq_oput g v ofiles
+rp = cq_path g v trepo
+pk_reset
+pk_add tgit
+pk_add tgc
+pk_add view part g GP rp
+pk_add tlsf
+rc = cq_runout g v tlout 20000
+cq_obsout g v get v VRL 2000
+end
+
+fn cq_read g edit uchar 1507328 v edit ulong 64 to void
+if ne get v VOK 1
+cq_oput g v obadp
+ret
+end
+n = cq_rpath g v GACT get v VAPL
+r = cq_rdg g GP2 n GFIL GFCAP
+if lt r 0
+cq_oput g v onof
+cq_ocopy g v GACT get v VAPL
+cq_oput g v tnl
+ret
+end
+cq_ocopy g v GACT get v VAPL
+cq_oput g v ocolon
+cq_obsout g v ulong r FILCAP
+end
+
+note cq_obs: the observation of the step's action into g[GOBS, ...) (v VOBS).
+fn cq_obs g edit uchar 1507328 v edit ulong 64 to void
+put v VOBS 0
+k = get v VKIND
+if eq k 0
+cq_oput g v onone
+ret
+end
+if eq k 1
+cq_list g v
+ret
+end
+if eq k 2
+cq_read g v
+ret
+end
+if eq k 3
+cq_wobs g v
+ret
+end
+if eq k 4
+cq_tests g v
+ret
+end
+cq_oput g v odone
+end
+
+fn cq_wobs g edit uchar 1507328 v edit ulong 64 to void
+ok = get v VOK
+if eq ok 0
+cq_oput g v obadp
+ret
+end
+if eq ok 2
+cq_oput g v oown
+cq_ocopy g v GACT get v VAPL
+cq_oput g v tnl
+ret
+end
+if eq ok 3
+cq_oput g v oblk
+ret
+end
+cq_oput g v owrote
+cq_ocopy g v GACT get v VAPL
+cq_oput g v tsp
+cq_odec g v get v VWL
+cq_oput g v obytes
+cq_tests g v
+end
+
+note ======== the step machine ========
+
+fn cq_term g edit uchar 1507328 v edit ulong 64 st ulong to ulong
+cq_rec2 g v 84 0 st
+put v VTERM st
+ret 1
+end
+
+fn cq_hasx g edit uchar 1507328 v edit ulong 64 to bool
+x = cq_jload g v
+ret gt cq_jfind g v 88 0 0
+end
+
+note cq_step: run or replay step s; 1 when the task reached a terminal state.
+fn cq_step g edit uchar 1507328 v edit ulong 64 s ulong to ulong
+put v VSTEP s
+ro = cq_jfind g v 82 s
+if eq ro 0
+if cq_hasx g v
+ret cq_term g v 2
+end
+x = cq_ask g v s
+if gt x 0
+ret x
+end
+ro = cq_jfind g v 82 s
+end
+pt = cq_fnum g v ro 2
+ct = cq_fnum g v ro 3
+cq_mxc g v pt ct
+put v VTMS add get v VTMS cq_fnum g v ro 4
+n = cq_fhex g v ro 5 GCON 65536
+if lt n 0
+trap 12
+end
+put v VCON ulong n
+if eq cq_jfind g v 69 s 0
+if cq_hasx g v
+ret cq_term g v 2
+end
+end
+cq_parse g v
+if eq cq_jfind g v 65 s 0
+put v VNC 2
+put v VN0 get v VKIND
+put v add VN0 1 get v VOK
+cq_rech g v 65 s GACT get v VAPL
+end
+x = cq_effect g v s
+if eq cq_jfind g v 79 s 0
+cq_obs g v
+put v VNC 0
+cq_rech g v 79 s GOBS get v VOBS
+end
+if eq get v VKIND 5
+ret cq_term g v 1
+end
+ret 0
+end
+
+fn cq_mxc g edit uchar 1507328 v edit ulong 64 pt ulong ct ulong to void
+if gt add pt ct add get v VMXP get v VMXC
+put v VMXP pt
+put v VMXC ct
+end
+end
+
+note cq_ask: I, inference, then R (0) or N + T FAILED (1).
+fn cq_ask g edit uchar 1507328 v edit ulong 64 s ulong to ulong
+if eq cq_jfind g v 73 s 0
+cq_rec2 g v 73 s 0
+end
+rs = cq_infer g v s
+if gt rs 0
+put v VRSN rs
+cq_rec3 g v 78 s rs get v VHST
+ret cq_term g v 4
+end
+put v VNC 3
+put v VN0 get v VPT
+put v add VN0 1 get v VCT
+put v add VN0 2 get v VMS
+cq_rech g v 82 s GCON get v VCON
+if eq get v VCRSH 1
+exit 77
+end
+ret 0
+end
+
+note cq_effect: the WRITE effect of step s, exactly once (E, write, D).
+fn cq_effect g edit uchar 1507328 v edit ulong 64 s ulong to long
+if ne get v VKIND 3
+ret 0
+end
+if ne get v VOK 1
+ret 0
+end
+if gt cq_jfind g v 68 s 0
+ret 0
+end
+if eq cq_jfind g v 69 s 0
+put v VNC 0
+cq_rech g v 69 s GACT get v VAPL
+if eq get v VCRSH 2
+exit 77
+end
+end
+r = cq_wfile g v
+if lt r 0
+trap 11
+end
+if eq get v VCRSH 3
+exit 77
+end
+h = cq_fnv view part g get v VWS get v VWL
+cq_rec3 g v 68 s get v VWL h
+ret 0
+end
+
+note ======== loading a task directory ========
+
+fn cq_ld g edit uchar 1507328 v edit ulong 64 t view uchar * dst ulong cap ulong to ulong
+pl = cq_path g v t
+n = cq_rdg g GP pl dst cap
+if lt n 0
+ret 0
+end
+ret ulong n
+end
+
+fn cq_load g edit uchar 1507328 v edit ulong 64 to long
+put v VISS cq_ld g v tiss GISS 8192
+put v VOWN cq_ld g v town GOWN 4096
+put v VTST cq_ld g v ttst GTST 4096
+put v VTERM 0
+put v VMXP 0
+put v VMXC 0
+put v VTMS 0
+put v VRSN 0
+put v VHST 0
+put v VSTEP 0
+ret cq_jload g v
+end
+
+note cq_tstate: the state of the T record, 0 when none.
+fn cq_tstate g edit uchar 1507328 v edit ulong 64 to ulong
+o = cq_jfind g v 84 0
+if eq o 0
+ret 0
+end
+ret cq_fnum g v o 2
+end
+
+note cq_runall: the agent loop; returns the terminal state.
+fn cq_runall g edit uchar 1507328 v edit ulong 64 to ulong
+t = cq_tstate g v
+if gt t 0
+cq_scan g v
+ret t
+end
+for i ulong get v VSTP bound 64
+r = cq_step g v add i 1
+if gt r 0
+ret get v VTERM
+end
+end
+x = cq_term g v 3
+ret 3
+end
+
+note cq_scan: usage statistics of a finished journal (for the report line).
+fn cq_scan g edit uchar 1507328 v edit ulong 64 to void
+for i ulong 64
+o = cq_jfind g v 82 add i 1
+if eq o 0
+ret
+end
+cq_mxc g v cq_fnum g v o 2 cq_fnum g v o 3
+put v VTMS add get v VTMS cq_fnum g v o 4
+put v VSTEP add i 1
+end
+end
+
+fn cq_say g edit uchar 1507328 v edit ulong 64 st ulong to void
+b = new uchar 1400 0
+p = rc_cat b 0 tcqa
+for i ulong get v VDL bound 1024
+p = rc_byte b p get g add GDIR i
+end
+p = rc_cat b p tst
+p = rc_dec b p st
+p = rc_cat b p tsteps
+p = rc_dec b p get v VSTEP
+p = rc_cat b p trsn
+p = rc_dec b p cq_reason g v
+p = rc_cat b p tmxc
+p = rc_dec b p add get v VMXP get v VMXC
+p = rc_cat b p tms
+p = rc_dec b p get v VTMS
+p = rc_byte b p 10
+rc_out view part b 0 p
+end
+
+fn cq_reason g edit uchar 1507328 v edit ulong 64 to ulong
+for i ulong 64
+o = cq_jfind g v 78 add i 1
+if gt o 0
+ret cq_fnum g v o 2
+end
+end
+ret 0
+end
+
+note ======== command line ========
+
+note cq_opt: steps=N, maxtok=N, crash=R|E|W, max=K (serve only, into v VMAX); false otherwise.
+fn cq_opt v edit ulong 64 i ulong to bool
+b = new uchar 64 0
+n = rc_arg i b
+if lt n 0
+ret false
+end
+m = ulong n
+if and gt m len tstp rc_is b 0 len tstp tstp
+x = rc_num b len tstp sub m len tstp
+if or eq x 0 gt x 64
+ret false
+end
+put v VSTP x
+ret true
+end
+if and gt m len tmxt rc_is b 0 len tmxt tmxt
+x2 = rc_num b len tmxt sub m len tmxt
+if or eq x2 0 gt x2 999999
+ret false
+end
+put v VMAXT x2
+ret true
+end
+if and gt m len tmax rc_is b 0 len tmax tmax
+x3 = rc_num b len tmax sub m len tmax
+if or eq x3 0 gt x3 100000
+ret false
+end
+put v VMAX x3
+ret true
+end
+if and eq m add len tcrs 1 rc_is b 0 len tcrs tcrs
+c = get b len tcrs
+put v VCRSH 0
+if eq c 82
+put v VCRSH 1
+end
+if eq c 69
+put v VCRSH 2
+end
+if eq c 87
+put v VCRSH 3
+end
+ret gt get v VCRSH 0
+end
+ret false
+end
+
+fn cq_dir g edit uchar 1507328 v edit ulong 64 i ulong to bool
+n = rc_arg i part g GDIR 1000
+if lt n 1
+ret false
+end
+put v VDL ulong n
+ret true
+end
+
+fn cq_port i ulong to ulong
+b = new uchar 16 0
+n = rc_arg i b
+if lt n 1
+ret 0
+end
+x = rc_num b 0 ulong n
+if or eq x 0 gt x 65535
+ret 0
+end
+ret x
+end
+
+fn cq_task g edit uchar 1507328 v edit ulong 64 to int
+if lt ulong argcnt 4
+rc_out tusage
+ret 2
+end
+if not cq_dir g v 2
+ret 2
+end
+put v VMP cq_port 3
+if or eq get v VMP 0 eq get v VMP 18091
+rc_out tusage
+ret 2
+end
+for i ulong sub ulong argcnt 4 bound 8
+if not cq_opt v add i 4
+rc_out tusage
+ret 2
+end
+end
+r = cq_load g v
+if lt r 0
+ret 3
+end
+st = cq_runall g v
+cq_say g v st
+ret 0
+end
+
+fn cq_cancel g edit uchar 1507328 v edit ulong 64 to int
+if not cq_dir g v 2
+ret 2
+end
+r = cq_jload g v
+if lt r 0
+ret 3
+end
+if eq cq_tstate g v 0
+cq_rec2 g v 88 0 0
+end
+ret 0
+end
+
+note ======== serve: the endpoint for the frozen DRA-124 suite runner ========
+
+note sv_find: first index of t in g[p, e), else e.
+fn sv_find g edit uchar 1507328 p ulong e ulong t view uchar * to ulong
+ret rc_find view part g 0 e p e t
+end
+
+note sv_wfile: g[s, s + n) to DIR/repo/<g[po, po + pn)>, creating parent directories.
+fn sv_wfile g edit uchar 1507328 v edit ulong 64 po ulong pn ulong s ulong n ulong to long
+m = cq_rpath g v po pn
+cq_mkpar g m
+fd = fopen g GP2 m 524865 420
+if lt fd 0
+ret fd
+end
+r = rc_wall int fd view part g s n n
+c = fclose int fd
+ret r
+end
+
+note sv_tree: the files of the prompt in g[b, e) ("### path" + a ```python block each) into repo/;
+note the number of files, or -1 when malformed.
+fn sv_tree g edit uchar 1507328 v edit ulong 64 b ulong e ulong to long
+p = b
+k = long 0
+for it ulong 256
+h = sv_find g p e tsec
+if ge h e
+ret k
+end
+po = add h len tsec
+pe = cq_lend g po e
+if not cq_okpath g po sub pe po
+ret -1
+end
+if not cq_kw g add pe 1 e tpyo
+ret -1
+end
+cs = add add pe 1 len tpyo
+z = sv_find g cs e tfence
+if ge z e
+ret -1
+end
+ce = z
+r = sv_wfile g v po sub pe po cs sub ce cs
+if lt r 0
+ret -1
+end
+k = add k 1
+p = add ce 3
+end
+ret k
+end
+
+note sv_task: issue.txt (the Task paragraph), own.txt (the named target) and test.txt from the
+note prompt in g[b, e); false when the prompt is not a DRA-124 coding item.
+fn sv_task g edit uchar 1507328 v edit ulong 64 b ulong e ulong to bool
+t = sv_find g b e ttask0
+if ge t e
+ret false
+end
+ts = add t 1
+te = sv_find g ts e treply0
+r = sv_wr g v tiss ts sub te ts
+ret sv_own g v b e
+end
+
+fn sv_own g edit uchar 1507328 v edit ulong 64 b ulong e ulong to bool
+c = sv_find g b e tcnew
+if ge c e
+ret false
+end
+cs = add c len tcnew
+ce = sv_find g cs e tinone
+if ge ce e
+ret false
+end
+if not cq_okpath g cs sub ce cs
+ret false
+end
+r = sv_ownw g v cs sub ce cs
+sv_test g v cs sub ce cs
+ret true
+end
+
+fn sv_ownw g edit uchar 1507328 v edit ulong 64 o ulong n ulong to long
+lb = new uchar 256 0
+for i ulong n bound 200
+put lb i get g add o i
+end
+put lb n 10
+ret sv_wrb g v town view part lb 0 add n 1
+end
+
+fn sv_wr g edit uchar 1507328 v edit ulong 64 t view uchar * s ulong n ulong to long
+pl = cq_path g v t
+fd = fopen g GP pl 524865 420
+if lt fd 0
+ret fd
+end
+r = rc_wall int fd view part g s n n
+c = fclose int fd
+ret r
+end
+
+fn sv_wrb g edit uchar 1507328 v edit ulong 64 t view uchar * b view uchar * to long
+pl = cq_path g v t
+fd = fopen g GP pl 524865 420
+if lt fd 0
+ret fd
+end
+r = rc_wall int fd b len b
+c = fclose int fd
+ret r
+end
+
+note sv_test: test.txt = bwrap --unshare-all (no network, read-only /, private /tmp) with cwd
+note the repo, then python3 -B compiling every named file: the build check of a DRA-124 item. The
+note item's tests are hidden from the agent: they are the suite's judge (accept.om exec repo).
+fn sv_test g edit uchar 1507328 v edit ulong 64 po ulong pn ulong to void
+lb = new uchar 4096 0
+rp = cq_path g v trepo
+p = rc_cat lb 0 tbwrap
+p = sv_l lb p tubw1
+p = sv_lg lb p g rp
+p = sv_lg lb p g rp
+p = sv_l lb p tubw2
+p = sv_lg lb p g rp
+p = sv_l lb p tubw3
+p = sv_l lb p tpy
+p = sv_l lb p tpyc
+p = rc_byte lb p 10
+for j ulong pn bound 200
+p = rc_byte lb p get g add po j
+end
+p = rc_byte lb p 10
+r = sv_wrb g v ttst view part lb 0 p
+end
+
+
+fn sv_l b edit uchar * p ulong t view uchar * to ulong
+q = rc_byte b p 10
+ret rc_cat b q t
+end
+
+note sv_lg: a newline, then g[GP, GP + n), onto b at p.
+fn sv_lg b edit uchar * p ulong g view uchar 1507328 n ulong to ulong
+q = rc_byte b p 10
+for i ulong n bound 1536
+q = rc_byte b q get g add GP i
+end
+ret q
+end
+
+
+note sv_run: run pk with no cwd change, output discarded (into DIR/git.out).
+fn sv_run g edit uchar 1507328 v edit ulong 64 of view uchar * to long
+op = cq_path g v of
+pid = cq_spawn g 0 0 GP op
+if lt pid 0
+ret pid
+end
+ret cq_wait pid 20000
+end
+
+
+fn sv_g1 g edit uchar 1507328 rp ulong to void
+pk_reset
+pk_add tgit
+pk_add tgc
+pk_add view part g GACT rp
+end
+
+note sv_git: git init, add and commit of repo/, then rev-parse HEAD into base.txt.
+fn sv_git g edit uchar 1507328 v edit ulong 64 to long
+rp = cq_path g v trepo
+for i ulong rp
+put g add GACT i get g add GP i
+end
+sv_g1 g rp
+pk_add tinit
+pk_add tqq
+r = sv_run g v tgout
+sv_g1 g rp
+pk_add tadd
+pk_add tall
+r = sv_run g v tgout
+sv_g1 g rp
+pk_add tcfg
+pk_add tuname
+pk_add tcfg
+pk_add tumail
+pk_add tcomit
+pk_add tqq
+pk_add tmm
+pk_add tbase
+r = sv_run g v tgout
+sv_g1 g rp
+pk_add trevp
+pk_add thead
+ret sv_run g v tbsf
+end
+
+note sv_last: the content of the last message with role user in the request d, or jsnone.
+fn sv_last d view uchar * tp view uint 65552 to ulong
+ms = cq_mem d tp 0 kmsgs
+if eq ms jsnone
+ret jsnone
+end
+if ne js_type tp ms jsarr
+ret jsnone
+end
+best = ulong jsnone
+e = js_first tp ms
+for i ulong 4096
+if eq e jsnone
+break
+end
+ro = cq_mem d tp e krole
+if ne ro jsnone
+if js_streq d js_off tp ro vuser
+best = cq_mem d tp e kcont
+end
+end
+e = js_enext tp e
+end
+ret best
+end
+
+note sv_resp: the chat.completion answer (status 200): content = ```python + the target file + ```.
+fn sv_resp g edit uchar 1507328 v edit ulong 64 ob edit uchar 132096 to long
+o = cq_ld g v town GACT 256
+n = o
+if gt n 0
+n = sub n 1
+end
+m = cq_rpath g v GACT n
+fl = cq_rdg g GP2 m GFIL 65536
+if lt fl 0
+fl = long 0
+end
+lim = add GOBS 65536
+p = cq_put g GOBS lim tpyo
+p = cq_copy g p lim GFIL ulong fl
+if gt fl 0
+if ne get g sub p 1 10
+p = cq_put g p lim tnl
+end
+end
+p = cq_put g p lim tfence
+p = cq_put g p lim tnl
+r = js_winit ob
+js_wobj ob
+cq_kv ob kid vcqa
+cq_kv ob kobj vcc
+js_wsbuf ob kcrt 0 len kcrt
+js_wulong ob 0
+cq_kv ob kmodel vcqa
+js_wsbuf ob kchoi 0 len kchoi
+js_warr ob
+js_wobj ob
+js_wsbuf ob kindex 0 len kindex
+js_wulong ob 0
+js_wsbuf ob kmsg 0 len kmsg
+js_wobj ob
+cq_kv ob krole vasst
+js_wsbuf ob kcont 0 len kcont
+js_wsbuf ob g GOBS sub p GOBS
+js_wobje ob
+cq_kv ob kfin vstop
+js_wobje ob
+js_warre ob
+sv_usage g v ob
+js_wobje ob
+ret js_wdone ob
+end
+
+fn sv_usage g edit uchar 1507328 v edit ulong 64 ob edit uchar 132096 to void
+js_wsbuf ob kusage 0 len kusage
+js_wobj ob
+js_wsbuf ob kpt 0 len kpt
+js_wulong ob get v VMXP
+js_wsbuf ob kct 0 len kct
+js_wulong ob get v VMXC
+js_wsbuf ob ktt 0 len ktt
+js_wulong ob add get v VMXP get v VMXC
+js_wobje ob
+end
+
+note sv_err: the serve.om error object; ctx true gives code context_length_exceeded.
+fn sv_err ob edit uchar 132096 ctx bool to long
+r = js_winit ob
+js_wobj ob
+js_wsbuf ob kerr 0 len kerr
+js_wobj ob
+if ctx
+cq_kv ob kmsg ectxm
+else
+cq_kv ob kmsg efail
+end
+cq_kv ob ktype vinv
+js_wsbuf ob kparam 0 len kparam
+js_wnull ob
+js_wsbuf ob kcode 0 len kcode
+if ctx
+js_wsbuf ob ectx 0 len ectx
+else
+js_wnull ob
+end
+js_wobje ob
+js_wobje ob
+ret js_wdone ob
+end
+
+fn sv_send cs edit ulong 320 io edit uchar 131072 ob view uchar 132096 st ulong wl long to long
+if lt wl 0
+ret hrsperr cs io 500
+end
+r = hrspst cs io st
+r = hfe r hhname cs io tctype
+r = hfe r hhval cs io tjson
+r = hfe r hhend cs io 0 ulong wl
+r = hfe r hput cs io view part ob 1040 ulong wl
+ret hfe r hwfin cs io
+end
+
+note sv_item: one POST with the request body in d: builds WORK/<v VK>, runs the agent, answers.
+fn sv_item g edit uchar 1507328 v edit ulong 64 cs edit ulong 320 io edit uchar 131072 d view uchar * to long
+tp = new uint 65552 0
+r = js_init tp 262144 64
+x = js_parse d tp len d
+if lt x 0
+ret hrsperr cs io 400
+end
+ct = sv_last d tp
+if eq ct jsnone
+ret hrsperr cs io 400
+end
+if ne js_type tp ct jsstr
+ret hrsperr cs io 400
+end
+cn = js_sget d js_off tp ct part g GFIL GFCAP
+if lt cn 0
+ret hrsperr cs io 400
+end
+ok = sv_mk g v cs io get v VK ulong cn
+if not ok
+ret hrsperr cs io 422
+end
+ret sv_agent g v cs io
+end
+
+fn sv_agent g edit uchar 1507328 v edit ulong 64 cs edit ulong 320 io edit uchar 131072 to long
+r = cq_load g v
+st = cq_runall g v
+cq_say g v st
+ob = new uchar 132096 0
+if eq st 4
+c1 = eq cq_reason g v 1
+wl = sv_err ob c1
+if c1
+ret sv_send cs io ob 400 wl
+end
+ret sv_send cs io ob 502 wl
+end
+wl2 = sv_resp g v ob
+ret sv_send cs io ob 200 wl2
+end
+
+note sv_mk: DIR = WORK/<k>: repo files, task files, git commit; the prompt is in g[GFIL, GFIL + n).
+fn sv_mk g edit uchar 1507328 v edit ulong 64 cs edit ulong 320 io edit uchar 131072 k ulong n ulong to bool
+q = cq_copy g GDIR add GDIR 1000 GWRK get v VFL
+q = cq_put g q add GDIR 1000 tdirs
+q = cq_putd g q add GDIR 1000 k
+put v VDL sub q GDIR
+r = makedir g GDIR get v VDL 448
+if lt r 0
+ret false
+end
+rp = cq_path g v trepo
+r = makedir g GP rp 493
+e = add GFIL n
+c = sv_tree g v GFIL e
+if lt c 1
+ret false
+end
+if not sv_task g v GFIL e
+ret false
+end
+x = sv_git g v
+sv_hitem g v cs io
+ret true
+end
+
+note sv_hitem: the X-Accept-Item header (the suite's item id) into DIR/item.txt.
+fn sv_hitem g edit uchar 1507328 v edit ulong 64 cs edit ulong 320 io edit uchar 131072 to void
+i = hhfind cs io hitem
+if lt i 0
+ret
+end
+o = hhvoff cs ulong i
+n = hhvlen cs ulong i
+if gt n 200
+ret
+end
+r = sv_wrb g v titem view part io o n
+end
+
+fn sv_one g edit uchar 1507328 v edit ulong 64 lf int to long
+c = haccept lf 3600000000000
+if lt c 0
+ret c
+end
+cs = new ulong 320 0
+io = new uchar 131072 0
+r = hinit cs io int c 1
+if lt r 0
+x = hclose cs
+ret 0
+end
+hsettmo cs 60000000000 60000000000
+hsetbdl cs 60000000000
+r = hreqrd cs io
+if gt r 0
+put cs HKEEP 0
+r = sv_route g v cs io
+else
+if lt r 0
+x = hreject cs io r
+end
+end
+x = hclose cs
+ret 0
+end
+
+fn sv_route g edit uchar 1507328 v edit ulong 64 cs edit ulong 320 io edit uchar 131072 to long
+if hispath cs io thlth
+ret hrspempty cs io 200
+end
+if not hispath cs io tchat
+ret hrspempty cs io 404
+end
+if not hismeth cs io tpost
+ret hrspempty cs io 405
+end
+d = new uchar 262144 0
+n = hbodyall cs io d
+if lt n 0
+ret hrsperr cs io 413
+end
+ret sv_item g v cs io view part d 0 ulong n
+end
+
+fn cq_serve g edit uchar 1507328 v edit ulong 64 to int
+if lt ulong argcnt 5
+rc_out tusage
+ret 2
+end
+pt = cq_port 2
+put v VMP cq_port 3
+if or or eq pt 0 eq get v VMP 0 or eq pt 18091 eq get v VMP 18091
+rc_out tusage
+ret 2
+end
+put v VMAX 1000
+for i ulong sub ulong argcnt 5 bound 8
+if not cq_opt v add i 5
+rc_out tusage
+ret 2
+end
+end
+put v VCRSH 0
+w = rc_arg 4 part g GWRK 1000
+if lt w 1
+ret 2
+end
+put v VFL ulong w
+a = new uchar 16 0
+r = haddr4 a 2130706433 pt
+lf = hlisten a 16
+if lt lf 0
+ret 71
+end
+pb = new uchar 64 0
+p = rc_cat pb 0 tport
+p = rc_dec pb p hport a
+p = rc_byte pb p 10
+rc_out view part pb 0 p
+for j ulong get v VMAX bound 100000
+put v VK add j 1
+r = sv_one g v int lf
+if lt r 0
+break
+end
+end
+c = fclose int lf
+ret 0
+end
+
+fn main to int
+g = new uchar 1507328 0
+v = new ulong 64 0
+put v VSTP 6
+put v VMAXT 256
+b = new uchar 16 0
+n = rc_arg 1 b
+if lt n 1
+rc_out tusage
+ret 2
+end
+if rc_is b 0 ulong n ttask
+ret cq_task g v
+end
+if rc_is b 0 ulong n tcanc
+ret cq_cancel g v
+end
+if rc_is b 0 ulong n tserv
+ret cq_serve g v
+end
+rc_out tusage
+ret 2
+end

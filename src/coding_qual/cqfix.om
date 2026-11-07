@@ -1,0 +1,316 @@
+note SPDX-License-Identifier: AGPL-3.0-or-later
+note cqfix.om: SYNTHETIC scripted protocol fixture for the DRA-184 coding harness. It is not a
+note model and proves the harness's interfaces only (labelled SYNTHETIC wherever it is used).
+note It answers POST /v1/chat/completions the way aien-train serve.om (DRA-119) does: one
+note chat.completion JSON object with choices[0].message.content, finish_reason stop and usage.
+note The k-th request (k from 1) gets line k of SCRIPT (the last line once the script is used up):
+note   C MS HEX     content = the bytes of HEX, sent after MS milliseconds
+note   E MS ctx     400 {"error":{... "code":"context_length_exceeded"}} after MS milliseconds
+note   E MS http    500 with an empty body after MS milliseconds
+note Run: cqfix SCRIPT [maxconn] binds 127.0.0.1 on an ephemeral port, prints `PORT n`, then one
+note `F k bodylen fnv64(body)` line per request before it answers; exits after maxconn connections
+note (default 64) or 600 s without a connection.
+
+text fport "PORT "
+text fchat "/v1/chat/completions"
+text fhealth "/health"
+text fpost "POST"
+text fctype "Content-Type"
+text fjson "application/json"
+text kid "id"
+text vid "cqfix"
+text kobj "object"
+text vcc "chat.completion"
+text kcrt "created"
+text kmodel "model"
+text vmodel "synthetic-fixture"
+text kchoi "choices"
+text kindex "index"
+text kmsg "message"
+text krole "role"
+text vasst "assistant"
+text kcont "content"
+text kfin "finish_reason"
+text vstop "stop"
+text kusage "usage"
+text kpt "prompt_tokens"
+text kct "completion_tokens"
+text ktt "total_tokens"
+text kerr "error"
+text ktype "type"
+text vinv "invalid_request_error"
+text kparam "param"
+text kcode "code"
+text vctx "context_length_exceeded"
+text mctx "SYNTHETIC fixture: context_length_exceeded"
+text fl "F "
+text tctx "ctx"
+
+fn fx_key ob edit uchar 140000 k view uchar * to void
+js_wsbuf ob k 0 len k
+end
+
+fn fx_kv ob edit uchar 140000 k view uchar * v view uchar * to void
+js_wsbuf ob k 0 len k
+js_wsbuf ob v 0 len v
+end
+
+note fx_line: start << 32 | length of line k (1-based) of the script s[0, n), the last line when
+note k is past the end; 0 when the script is empty.
+fn fx_line s view uchar * k ulong to ulong
+p = ulong 0
+i = ulong 1
+ls = ulong 0
+ll = ulong 0
+while lt p len s bound 16777217
+q = p
+while lt q len s bound 16777217
+if eq get s q 10
+break
+end
+q = add q 1
+end
+if gt q p
+ls = p
+ll = sub q p
+if eq i k
+ret or shl ls 32 ll
+end
+i = add i 1
+end
+p = add q 1
+end
+ret or shl ls 32 ll
+end
+
+fn fx_fld s view uchar * o ulong n ulong f ulong to ulong
+k = ulong 0
+p = o
+e = add o n
+while lt p e bound 16777217
+if eq k f
+q = p
+while lt q e bound 16777217
+if eq get s q 32
+break
+end
+q = add q 1
+end
+ret or shl p 32 sub q p
+end
+if eq get s p 32
+k = add k 1
+end
+p = add p 1
+end
+ret shl e 32
+end
+
+fn fx_resp ob edit uchar 140000 c view uchar * to long
+r = js_winit ob
+js_wobj ob
+fx_kv ob kid vid
+fx_kv ob kobj vcc
+fx_key ob kcrt
+js_wulong ob 0
+fx_kv ob kmodel vmodel
+fx_key ob kchoi
+js_warr ob
+js_wobj ob
+fx_key ob kindex
+js_wulong ob 0
+fx_key ob kmsg
+js_wobj ob
+fx_kv ob krole vasst
+fx_key ob kcont
+js_wsbuf ob c 0 len c
+js_wobje ob
+fx_kv ob kfin vstop
+js_wobje ob
+js_warre ob
+fx_key ob kusage
+js_wobj ob
+fx_key ob kpt
+js_wulong ob 1
+fx_key ob kct
+js_wulong ob 1
+fx_key ob ktt
+js_wulong ob 2
+js_wobje ob
+js_wobje ob
+ret js_wdone ob
+end
+
+fn fx_ectx ob edit uchar 140000 to long
+r = js_winit ob
+js_wobj ob
+fx_key ob kerr
+js_wobj ob
+fx_kv ob kmsg mctx
+fx_kv ob ktype vinv
+fx_key ob kparam
+js_wnull ob
+fx_kv ob kcode vctx
+js_wobje ob
+js_wobje ob
+ret js_wdone ob
+end
+
+fn fx_send cs edit ulong 320 io edit uchar 131072 ob view uchar 140000 st ulong wl long to long
+if lt wl 0
+ret hrsperr cs io 500
+end
+r = hrspst cs io st
+r = hfe r hhname cs io fctype
+r = hfe r hhval cs io fjson
+r = hfe r hhend cs io 0 ulong wl
+r = hfe r hput cs io view part ob 1040 ulong wl
+ret hfe r hwfin cs io
+end
+
+fn fx_log k ulong n ulong h ulong to void
+b = new uchar 96 0
+p = rc_cat b 0 fl
+p = rc_dec b p k
+p = rc_byte b p 32
+p = rc_dec b p n
+p = rc_byte b p 32
+p = rc_dec b p h
+p = rc_byte b p 10
+rc_out view part b 0 p
+end
+
+fn fx_fnv s view uchar * to ulong
+h = ulong 14695981039346656037
+for i ulong len s
+h = mul xor h ulong get s i 1099511628211
+end
+ret h
+end
+
+note fx_ans: answer request k from script line k.
+fn fx_ans cs edit ulong 320 io edit uchar 131072 sc view uchar * k ulong to long
+z = fx_line sc k
+lo = shr z 32
+ln = and z 4294967295
+if eq ln 0
+ret hrsperr cs io 500
+end
+f1 = fx_fld sc lo ln 1
+ms = rc_num sc shr f1 32 and f1 4294967295
+if lt ms 3600000
+x = sleepns long mul ms 1000000
+end
+if eq get sc lo 69
+f2 = fx_fld sc lo ln 2
+if rc_is sc shr f2 32 and f2 4294967295 tctx
+ret fx_e cs io
+end
+ret hrsperr cs io 500
+end
+ret fx_c cs io sc lo ln
+end
+
+fn fx_e cs edit ulong 320 io edit uchar 131072 to long
+ob = new uchar 140000 0
+wl = fx_ectx ob
+ret fx_send cs io ob 400 wl
+end
+
+fn fx_c cs edit ulong 320 io edit uchar 131072 sc view uchar * lo ulong ln ulong to long
+ob = new uchar 140000 0
+f2 = fx_fld sc lo ln 2
+cb = new uchar 65536 0
+n = rc_unhex sc shr f2 32 and f2 4294967295 cb
+if lt n 0
+ret hrsperr cs io 500
+end
+wl = fx_resp ob view part cb 0 ulong n
+ret fx_send cs io ob 200 wl
+end
+
+fn fx_chat cs edit ulong 320 io edit uchar 131072 sc view uchar * k ulong to long
+body = new uchar 262144 0
+n = hbodyall cs io body
+if lt n 0
+ret hrsperr cs io 413
+end
+fx_log k ulong n fx_fnv view part body 0 ulong n
+ret fx_ans cs io sc k
+end
+
+fn fx_one lf int sc view uchar * k ulong to long
+c = haccept lf 600000000000
+if lt c 0
+ret c
+end
+cs = new ulong 320 0
+io = new uchar 131072 0
+r = hinit cs io int c 1
+if lt r 0
+x = hclose cs
+ret 0
+end
+hsettmo cs 30000000000 30000000000
+hsetbdl cs 30000000000
+r = hreqrd cs io
+if gt r 0
+put cs HKEEP 0
+if hispath cs io fchat
+r = fx_chat cs io sc k
+else
+r = hrspempty cs io 200
+end
+else
+if lt r 0
+x = hreject cs io r
+end
+end
+x = hclose cs
+ret 0
+end
+
+fn main to int
+sc = new uchar 262144 0
+pb = new uchar 1024 0
+n = rc_arg 1 pb
+if lt n 1
+ret 2
+end
+sl = rc_read view part pb 0 ulong n sc
+if lt sl 0
+ret 3
+end
+mx = ulong 64
+ab = new uchar 32 0
+m = rc_arg 2 ab
+if gt m 0
+v = rc_num ab 0 ulong m
+if and gt v 0 le v 100000
+mx = v
+end
+end
+ret fx_serve view part sc 0 ulong sl mx
+end
+
+fn fx_serve sc view uchar * mx ulong to int
+a = new uchar 16 0
+r = haddr4 a 2130706433 0
+lf = hlisten a 16
+if lt lf 0
+ret 2
+end
+pb = new uchar 64 0
+p = rc_cat pb 0 fport
+p = rc_dec pb p hport a
+p = rc_byte pb p 10
+rc_out view part pb 0 p
+for j ulong mx
+r = fx_one int lf sc add j 1
+if lt r 0
+break
+end
+end
+c = fclose int lf
+ret 0
+end

@@ -1,0 +1,1509 @@
+note SPDX-License-Identifier: AGPL-3.0-or-later
+note cqcase.om: scenario conductor, independent verifier and hidden-test judge for the DRA-184
+note coding harness. It runs cqa (the agent), cqfix (SYNTHETIC scripted fixture) and the judges as
+note separate processes (fork/execprog), cancels, kills (SIGKILL) and restarts cqa, and checks:
+note   verifier  (no cqa code): every journal line well-formed; exactly one T; per step at most one
+note             R, E and D, and a D for every E; no E after an X; the last D for each written path
+note             matches the file on disk (length, FNV-1a 64); `git status` of the isolated worktree
+note             shows changes to owned files only (own.txt), nothing else.
+note   judge     the scenario's hidden test (tests/coding_qual/judges/judge-sN.py, never visible to
+note             the agent) run in bwrap --unshare-all on the final worktree; PASS needs exit 0 and a
+note             fresh random nonce line in its output.
+note Usage:
+note   cqcase synthetic BIN WORK BASE JUDGES        cases c1..c12 against cqfix (label SYNTHETIC)
+note   cqcase real BIN WORK BASE JUDGES PORT        cases r1..r4 against a model on 127.0.0.1:PORT
+note BASE is the fixture git repository with branches cq-s1 (scenario S1) and cq-s2 (S2, one
+note planted regression); every case gets its own `git worktree add --detach` under WORK/<case>.
+note Prints `CASE <name> PASS|FAIL step <k>` per case, `OBSERVED <name> state=.. judge=..` in real
+note mode, then `CQCASE <LABEL> PASS cases=N` (exit 0) or `... FAIL failed=K cases=N` (exit 1).
+
+text tsyn "synthetic"
+text trl "real"
+text tsynl "SYNTHETIC"
+text treall "REAL"
+text tcase "CASE "
+text tpass " PASS\n"
+text tfail " FAIL step "
+text tobs "OBSERVED "
+text tost " state="
+text toj " judge="
+text tojp "PASS"
+text tojf "FAIL"
+text tosd " writes="
+text tosr " answers="
+text tsum1 "CQCASE "
+text tsum2 " PASS cases="
+text tsum3 " FAIL failed="
+text tsum4 " cases="
+text tusage "cqcase: usage: cqcase synthetic BIN WORK BASE JUDGES | cqcase real BIN WORK BASE JUDGES PORT\n"
+text tsl "/"
+text tcqa "cqa"
+text tfixb "cqfix"
+text ttask "task"
+text tcanc "cancel"
+text tst8 "steps=8"
+text tst6 "steps=6"
+text tst3 "steps=3"
+text tcrE "crash=E"
+text tcrW "crash=W"
+text tjrn "/journal.log"
+text tiss "/issue.txt"
+text town "/own.txt"
+text ttst "/test.txt"
+text trepo "/repo"
+text trepos "/repo/"
+text tscr ".script"
+text tfixo ".fix"
+text tout1 ".out1"
+text tout2 ".out2"
+text tout3 ".out3"
+text tjudo ".judge"
+text tgito ".git"
+text twto ".wt"
+text t64 "64"
+text tport "PORT "
+text tgit "/usr/bin/git"
+text tgc "-C"
+text twt "worktree"
+text tadd "add"
+text tqq "-q"
+text tdet "--detach"
+text tbr1 "cq-s1"
+text tbr2 "cq-s2"
+text tstat "status"
+text tpor "--porcelain"
+text tuall "-uall"
+text tbw "/usr/bin/bwrap"
+text tpy "/usr/bin/python3"
+text tbwa "--unshare-all\n--die-with-parent\n--ro-bind\n/\n/\n--dev\n/dev\n--proc\n/proc\n--tmpfs\n/tmp\n--ro-bind\n"
+text tbwb "--chdir\n"
+text tbwc "--\n/usr/bin/python3\n-B\n-m\nunittest\ndiscover\n-s\ntests\n-q\n"
+text tjs1 "judge-s1.py"
+text tjs2 "judge-s2.py"
+text tbB "-B"
+text tnl "\n"
+text tsp " "
+text is1 "Rename the helper require_text in textkit/norm.py to ensure_text and update every caller (textkit/words.py). Behaviour and error messages must not change.\n"
+text is2 "The test suite fails: tests/test_words.py test_truncate_words. Find the bug in the code and fix it. Do not change the tests.\n"
+text ow1 "textkit/norm.py\ntextkit/words.py\n"
+text ow2 "textkit/words.py\n"
+text bnorm1 "def ensure_text(name, value):\n    \"\"\"Raise TypeError naming the parameter when value is not a str; return value.\"\"\"\n    if not isinstance(value, str):\n        raise TypeError(f\"{name} must be a str, got {type(value).__name__}\")\n    return value\n"
+text bword1 "from .norm import ensure_text\n\n\ndef count_words(s):\n    \"\"\"Number of whitespace-separated words in s.\"\"\"\n    ensure_text(\"s\", s)\n    return len(s.split())\n\n\ndef title_case(s):\n    \"\"\"Every word with its first letter upper-cased and the rest lower-cased, single spaces.\"\"\"\n    ensure_text(\"s\", s)\n    return \" \".join(w[:1].upper() + w[1:].lower() for w in s.split())\n\n\ndef truncate_words(s, n):\n    \"\"\"The first n words of s joined by single spaces; all of them when s has n words or fewer.\"\"\"\n    ensure_text(\"s\", s)\n    words = s.split()\n    return \" \".join(words[:n]) if len(words) > n else \" \".join(words)\n"
+text bword2 "from .norm import require_text\n\n\ndef count_words(s):\n    \"\"\"Number of whitespace-separated words in s.\"\"\"\n    require_text(\"s\", s)\n    return len(s.split())\n\n\ndef title_case(s):\n    \"\"\"Every word with its first letter upper-cased and the rest lower-cased, single spaces.\"\"\"\n    require_text(\"s\", s)\n    return \" \".join(w[:1].upper() + w[1:].lower() for w in s.split())\n\n\ndef truncate_words(s, n):\n    \"\"\"The first n words of s joined by single spaces; all of them when s has n words or fewer.\"\"\"\n    require_text(\"s\", s)\n    words = s.split()\n    return \" \".join(words[:n]) if len(words) > n else \" \".join(words)\n"
+text bjunk "import unittest\n"
+text tpyo "```python\n"
+text tfence "```\n"
+note Scripts: records separated by ~, each MS^CONTENT (MS = delay in ms, X = a context error);
+note @1 @2 @3 @4 in CONTENT expand to a python block holding bnorm1 / bword1 / bword2 / bjunk.
+text sc1 "0^LIST\n~0^READ textkit/norm.py\n~0^WRITE textkit/norm.py\n@1~0^WRITE textkit/words.py\n@2~0^TEST\n~0^DONE\n"
+text sc2 "0^TEST\n~0^READ textkit/words.py\n~0^WRITE textkit/words.py\n@3~0^TEST\n~0^DONE\n"
+text sc3 "0^READ textkit/words.py\n~3000^WRITE textkit/words.py\n@3~0^DONE\n"
+text sc4 "0^LIST\n~0^WRITE textkit/norm.py\n@1~4000^WRITE textkit/words.py\n@2~0^WRITE textkit/words.py\n@2~0^TEST\n~0^DONE\n"
+text sc7 "0^WRITE tests/test_words.py\n@4~0^DONE\n"
+text sc8 "X^-"
+text sc9 "0^I am not sure what to do here.\n"
+text sc10 "0^READ ../../../../etc/passwd\n~0^READ /etc/passwd\n~0^WRITE ../escape.py\n@1~0^READ .git/config\n~0^DONE\n"
+text n1 "c1 cross-file-change"
+text n2 "c2 failing-test-fixed"
+text n3 "c3 cancel-mid-task"
+text n4 "c4 resume-after-sigkill"
+text n5 "c5 crash-after-intent-resume"
+text n6 "c6 crash-after-write-resume"
+text n7 "c7 ownership-refusal"
+text n8 "c8 context-exceeded"
+text n9 "c9 no-action-budget"
+text n10 "c10 path-escape-refusal"
+text n11 "c11 judge-negative-control"
+text n12 "c12 verifier-negative-control"
+text n13 "c13 torn-journal-tail-resume"
+text ttorn "D 3 24"
+text m1 "r1 real-cross-file-change"
+text m2 "r2 real-failing-test"
+text m3 "r3 real-cancel-mid-task"
+text m4 "r4 real-resume-after-sigkill"
+text ki1 "\nI 1 "
+text ki2 "\nI 2 "
+text ki3 "\nI 3 "
+text kr1 "\nR 1 "
+text kr3 "\nR 3 "
+text kd2 "\nD 2 "
+text kd3 "\nD 3 "
+text ke3 "\nE 3 "
+text kE "\nE "
+text kD "\nD "
+text kn1c "\nN 1 1 "
+text ka1r "\nA 1 3 2 "
+text kf6 "\nF 6 "
+text kf7 "\nF 7 "
+text kpre "\nPORT "
+text ko1t "\nO 1 74657374733a206578697420310a"
+text ko4t "\nO 4 74657374733a206578697420300a"
+text kona "4e6f20616374696f6e20666f756e64"
+text kobad "726566757365643a20696e76616c69642070617468"
+text tstray "/repo/stray.txt"
+text tnorm "/repo/textkit/norm.py"
+text tx "x"
+text tnc ""
+text ktn "\nT 0 "
+text kf3 "\nF 3 "
+text kf4 "\nF 4 "
+text n11b "c11b judge-negative-s1"
+text kR "\nR "
+
+global pk uchar 4096
+global pkn ulong 2
+
+note ======== packets and processes ========
+
+fn pk_reset to void
+put pkn 0 2
+put pkn 1 0
+put pk 0 0
+put pk 1 0
+end
+
+fn pk_add a view uchar * to void
+n = get pkn 0
+m = len a
+if gt add add n 2 m 4096
+trap 3
+end
+put pk n uchar and m 255
+put pk add n 1 uchar shr m 8
+for i ulong m
+put pk add add n 2 i get a i
+end
+put pkn 0 add add n 2 m
+c = add get pkn 1 1
+put pkn 1 c
+put pk 0 uchar and c 255
+put pk 1 uchar shr c 8
+end
+
+note cx_spawn: fork; the child changes to cb[co, co + cn) when cn > 0, writes stdout and stderr to
+note cb[oo, oo + on) and execs pk. The pid or a negative result.
+fn cx_spawn cb edit uchar 8192 co ulong cn ulong oo ulong on ulong to long
+pid = fork
+if lt pid 0
+ret pid
+end
+if eq pid 0
+if gt cn 0
+z = chdir cb co cn
+if lt z 0
+exit 126
+end
+end
+fd = fopen cb oo on 524865 384
+if ge fd 0
+d = dupfd int fd 1 0
+d = dupfd int fd 2 0
+end
+r = execprog pk 0 get pkn 0
+exit 127
+end
+ret pid
+end
+
+note cx_wait: exit status, 1000 + signal when killed.
+fn cx_wait pid long to long
+st = new uchar 4 0
+r = waitpid int pid st 0 4 0
+if lt r 0
+ret r
+end
+s = or or ulong get st 0 shl ulong get st 1 8 shl ulong get st 2 16
+if eq and s 127 0
+ret long and shr s 8 255
+end
+ret long add 1000 and s 127
+end
+
+note ======== paths in cb: BIN [0), WORK [1024), BASE [2048), JUDGES [3072), port text [4096),
+note case name [4160), nonce [4224); builders PA [5120), PB [6144), PC [7168). cv lengths 0..5.
+
+const PA ulong 5120
+const PB ulong 6144
+const PC ulong 7168
+
+fn cx_put cb edit uchar 8192 p ulong t view uchar * to ulong
+q = p
+for i ulong len t
+put cb q get t i
+q = add q 1
+end
+ret q
+end
+
+fn cx_cp cb edit uchar 8192 p ulong s ulong n ulong to ulong
+q = p
+for i ulong n bound 1024
+put cb q get cb add s i
+q = add q 1
+end
+ret q
+end
+
+note cx_pw: WORK/<case><sfx> into builder at; its length.
+fn cx_pw cb edit uchar 8192 cv edit ulong 32 ds ulong sfx view uchar * to ulong
+p = cx_cp cb ds 1024 get cv 1
+p = cx_put cb p tsl
+p = cx_cp cb p 4160 get cv 5
+p = cx_put cb p sfx
+ret sub p ds
+end
+
+fn cx_pb cb edit uchar 8192 cv edit ulong 32 ds ulong sfx view uchar * to ulong
+p = cx_cp cb ds 0 get cv 0
+p = cx_put cb p tsl
+p = cx_put cb p sfx
+ret sub p ds
+end
+
+fn cx_pj cb edit uchar 8192 cv edit ulong 32 ds ulong sfx view uchar * to ulong
+p = cx_cp cb ds 3072 get cv 3
+p = cx_put cb p tsl
+p = cx_put cb p sfx
+ret sub p ds
+end
+
+note cx_wr: t into the file WORK/<case><sfx> (created, truncated).
+fn cx_wr cb edit uchar 8192 cv edit ulong 32 sfx view uchar * t view uchar * to long
+n = cx_pw cb cv PC sfx
+fd = fopen cb PC n 524865 420
+if lt fd 0
+ret fd
+end
+r = rc_wall int fd t len t
+c = fclose int fd
+ret r
+end
+
+note cx_rd: the file WORK/<case><sfx> into jb; its length (0 when absent).
+fn cx_rd cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 sfx view uchar * to ulong
+n = cx_pw cb cv PC sfx
+r = rc_read view part cb PC n jb
+if lt r 0
+ret 0
+end
+ret ulong r
+end
+
+note ======== case setup ========
+
+note cx_name: set the case name (its first word) for paths.
+fn cx_name cb edit uchar 8192 cv edit ulong 32 nm view uchar * to void
+k = ulong 0
+for i ulong len nm bound 60
+if eq get nm i 32
+break
+end
+put cb add 4160 i get nm i
+k = add k 1
+end
+put cv 5 k
+end
+
+note cx_setup: WORK/<case> with an isolated worktree of branch cq-s<sc> and the task files.
+fn cx_setup cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 sc ulong to bool
+n = cx_pw cb cv PA tnc
+r = makedir cb PA n 448
+if lt r 0
+ret false
+end
+m = cx_pw cb cv PA trepo
+pk_reset
+pk_add tgit
+pk_add tgc
+pk_add view part cb 2048 get cv 2
+pk_add twt
+pk_add tadd
+pk_add tqq
+pk_add tdet
+pk_add view part cb PA m
+if eq sc 1
+pk_add tbr1
+else
+pk_add tbr2
+end
+o = cx_pw cb cv PB twto
+pid = cx_spawn cb 0 0 PB o
+if lt pid 0
+ret false
+end
+if ne cx_wait pid 0
+ret false
+end
+if eq sc 1
+r = cx_wr cb cv tiss is1
+r = cx_wr cb cv town ow1
+else
+r = cx_wr cb cv tiss is2
+r = cx_wr cb cv town ow2
+end
+ret cx_test cb cv
+end
+
+
+note cx_test: test.txt = bwrap (no network, read-only, private /tmp) python3 -B -m unittest discover.
+fn cx_test cb edit uchar 8192 cv edit ulong 32 to bool
+b = new uchar 4096 0
+m = cx_pw cb cv PA trepo
+p = rc_cat b 0 tbw
+p = rc_byte b p 10
+p = rc_cat b p tbwa
+p = cx_ln b p cb PA m
+p = cx_ln b p cb PA m
+p = rc_cat b p tbwb
+p = cx_ln b p cb PA m
+p = rc_cat b p tbwc
+r = cx_wr cb cv ttst view part b 0 p
+ret ge r 0
+end
+
+fn cx_ln b edit uchar 4096 p ulong cb view uchar 8192 o ulong n ulong to ulong
+q = p
+for i ulong n bound 1024
+put b q get cb add o i
+q = add q 1
+end
+put b q 10
+ret add q 1
+end
+
+note ======== scripts and the fixture ========
+
+note cx_blk: the expansion of @d into b at p.
+fn cx_blk b edit uchar 1048576 p ulong d uchar to ulong
+q = rc_cat b p tpyo
+if eq d 49
+q = rc_cat b q bnorm1
+end
+if eq d 50
+q = rc_cat b q bword1
+end
+if eq d 51
+q = rc_cat b q bword2
+end
+if eq d 52
+q = rc_cat b q bjunk
+end
+ret rc_cat b q tfence
+end
+
+note cx_rec: one script record s[a, e) (MS^CONTENT) as a cqfix line onto o at p.
+fn cx_rec s view uchar * a ulong e ulong o edit uchar 1048576 p ulong to ulong
+h = a
+while lt h e bound 65536
+if eq get s h 94
+break
+end
+h = add h 1
+end
+if eq get s a 88
+q = rc_byte o p 69
+q = rc_byte o q 32
+q = rc_byte o q 48
+q = rc_byte o q 32
+q = rc_byte o q 99
+q = rc_byte o q 116
+q = rc_byte o q 120
+ret rc_byte o q 10
+end
+q = rc_byte o p 67
+q = rc_byte o q 32
+for i ulong sub h a bound 16
+q = rc_byte o q get s add a i
+end
+q = rc_byte o q 32
+ct = new uchar 65536 0
+cn = cx_exp s add h 1 e ct
+q = rc_hex o q view part ct 0 cn
+ret rc_byte o q 10
+end
+
+fn cx_exp s view uchar * a ulong e ulong ct edit uchar 65536 to ulong
+x = new uchar 1048576 0
+w = ulong 0
+i = a
+while lt i e bound 65536
+c = get s i
+if and eq c 64 lt add i 1 e
+w = cx_blk x w get s add i 1
+i = add i 2
+else
+put x w c
+w = add w 1
+i = add i 1
+end
+end
+for j ulong w bound 65536
+put ct j get x j
+end
+ret w
+end
+
+note cx_script: the cqfix script for scenario text s into WORK/<case>.script.
+fn cx_script cb edit uchar 8192 cv edit ulong 32 s view uchar * to long
+o = new uchar 1048576 0
+p = ulong 0
+a = ulong 0
+while lt a len s bound 64
+e = a
+while lt e len s bound 65536
+if eq get s e 126
+break
+end
+e = add e 1
+end
+p = cx_rec s a e o p
+a = add e 1
+end
+ret cx_wr cb cv tscr view part o 0 p
+end
+
+note cx_fix: start cqfix on the case script; its port text into cb[4096) (cv 4), pid cv 9.
+fn cx_fix cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 s view uchar * to bool
+r = cx_script cb cv s
+if lt r 0
+ret false
+end
+pk_reset
+n = cx_pb cb cv PA tfixb
+pk_add view part cb PA n
+m = cx_pw cb cv PB tscr
+pk_add view part cb PB m
+pk_add t64
+o = cx_pw cb cv PC tfixo
+pid = cx_spawn cb 0 0 PC o
+if lt pid 0
+ret false
+end
+put cv 9 ulong pid
+for i ulong 400
+z = sleepns 10000000
+k = cx_rd cb cv jb tfixo
+if gt k 6
+if cx_port cb cv jb k
+ret true
+end
+end
+end
+ret false
+end
+
+fn cx_port cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 k ulong to bool
+if not rc_is jb 0 5 tport
+ret false
+end
+n = ulong 0
+for i ulong sub k 5 bound 8
+c = get jb add 5 i
+if or lt c 48 gt c 57
+break
+end
+put cb add 4096 i c
+n = add n 1
+end
+put cv 4 n
+ret gt n 0
+end
+
+fn cx_stopfix cv edit ulong 32 to void
+if gt get cv 9 0
+x = killpid int long get cv 9 9
+y = cx_wait long get cv 9
+put cv 9 0
+end
+end
+
+note ======== running cqa ========
+
+note cx_cqa: start `cqa task WORK/<case> PORT steps=S [crash=E|W]` with output WORK/<case>.outK;
+note md = S * 100 + C * 10 + K (S 8, 6 or 3; C 0 none, 1 crash=E, 2 crash=W; K 1..3). The pid.
+fn cx_cqa cb edit uchar 8192 cv edit ulong 32 md ulong to long
+pk_reset
+n = cx_pb cb cv PA tcqa
+pk_add view part cb PA n
+pk_add ttask
+m = cx_pw cb cv PB tnc
+pk_add view part cb PB m
+pk_add view part cb 4096 get cv 4
+s = div md 100
+if eq s 8
+pk_add tst8
+end
+if eq s 6
+pk_add tst6
+end
+if eq s 3
+pk_add tst3
+end
+c = rem div md 10 10
+if eq c 1
+pk_add tcrE
+end
+if eq c 2
+pk_add tcrW
+end
+k = rem md 10
+o = cx_pw cb cv PC tout1
+if eq k 2
+o = cx_pw cb cv PC tout2
+end
+ret cx_spawn cb 0 0 PC o
+end
+
+fn cx_run cb edit uchar 8192 cv edit ulong 32 md ulong to long
+pid = cx_cqa cb cv md
+if lt pid 0
+ret pid
+end
+ret cx_wait pid
+end
+
+fn cx_cancel cb edit uchar 8192 cv edit ulong 32 to long
+pk_reset
+n = cx_pb cb cv PA tcqa
+pk_add view part cb PA n
+pk_add tcanc
+m = cx_pw cb cv PB tnc
+pk_add view part cb PB m
+o = cx_pw cb cv PC tout3
+pid = cx_spawn cb 0 0 PC o
+if lt pid 0
+ret pid
+end
+ret cx_wait pid
+end
+
+note cx_poll: wait until the journal holds nd (at most ms milliseconds).
+fn cx_poll cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 nd view uchar * ms ulong to bool
+for i ulong div ms 20 bound 999999
+k = cx_rd cb cv jb tjrn
+if lt rc_find jb 0 k nd k
+ret true
+end
+z = sleepns 20000000
+end
+ret false
+end
+
+note cx_cnt: occurrences of nd in the case file <sfx>.
+fn cx_cnt cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 w ulong nd view uchar * to ulong
+k = cx_rd cb cv jb tjrn
+if eq w 1
+k = cx_rd cb cv jb tfixo
+end
+c = ulong 0
+p = ulong 0
+while lt p k bound 1048577
+i = rc_find jb p k nd
+if ge i k
+ret c
+end
+c = add c 1
+p = add i 1
+end
+ret c
+end
+
+fn cx_jc cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 nd view uchar * to ulong
+ret cx_cnt cb cv jb 0 nd
+end
+
+note cx_term: the T state of the journal (0 none).
+fn cx_term cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to ulong
+k = cx_rd cb cv jb tjrn
+i = rc_find jb 0 k ktn
+if ge i k
+ret 0
+end
+ret rc_num jb add i 5 1
+end
+
+
+note ======== verifier (independent of cqa's code) ========
+
+note vf_line: checks one journal line jb[p, e); counts into ct (kind x 65 steps); false when malformed.
+fn vf_line jb edit uchar 1048576 p ulong e ulong ct edit ulong 1040 to bool
+if lt sub e p 5
+ret false
+end
+k = get jb p
+ki = vf_kind k
+if eq ki 99
+ret false
+end
+if ne get jb add p 1 32
+ret false
+end
+q = add p 2
+while lt q e bound 32
+if eq get jb q 32
+break
+end
+q = add q 1
+end
+s = rc_num jb add p 2 sub q add p 2
+if gt s 64
+ret false
+end
+put ct add mul ki 65 s add get ct add mul ki 65 s 1
+if and eq ki 3 gt get ct 1035 0
+put ct 1036 1
+end
+if eq ki 6
+put ct 1035 1
+end
+ret true
+end
+
+note vf_kind: J 0, I 1, R 2, E 3, D 4, A 5, X 6, T 7, N 8, O 9, anything else 99.
+fn vf_kind k uchar to ulong
+if eq k 74
+ret 0
+end
+if eq k 73
+ret 1
+end
+if eq k 82
+ret 2
+end
+if eq k 69
+ret 3
+end
+if eq k 68
+ret 4
+end
+if eq k 65
+ret 5
+end
+if eq k 88
+ret 6
+end
+if eq k 84
+ret 7
+end
+if eq k 78
+ret 8
+end
+if eq k 79
+ret 9
+end
+ret 99
+end
+
+note cx_ver: the verifier; the failing check number (0 = PASS).
+fn cx_ver cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to ulong
+k = cx_rd cb cv jb tjrn
+if eq k 0
+ret 1
+end
+if ne get jb sub k 1 10
+ret 2
+end
+ct = new ulong 1040 0
+p = ulong 0
+while lt p k bound 1048577
+e = p
+while lt e k bound 1048577
+if eq get jb e 10
+break
+end
+e = add e 1
+end
+if not vf_line jb p e ct
+ret 3
+end
+p = add e 1
+end
+r = vf_counts ct
+if gt r 0
+ret r
+end
+r2 = vf_files cb cv jb
+if gt r2 0
+ret r2
+end
+ret vf_git cb cv jb
+end
+
+fn vf_counts ct edit ulong 1040 to ulong
+t = ulong 0
+for s ulong 65
+t = add t get ct add 455 s
+if gt get ct add 130 s 1
+ret 4
+end
+if gt get ct add 195 s 1
+ret 5
+end
+if ne get ct add 260 s get ct add 195 s
+ret 6
+end
+end
+if ne t 1
+ret 7
+end
+if gt get ct 1036 0
+ret 8
+end
+ret 0
+end
+
+note vf_files: for every step s with a D, unless a later step writes the same path, the file named
+note by E s must have the D's length and FNV-1a 64.
+fn vf_files cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to ulong
+for i ulong 64
+s = sub 64 i
+r = vf_one cb cv jb s
+if gt r 0
+ret r
+end
+end
+ret 0
+end
+
+note vf_one: step s; 0 when fine or not applicable.
+fn vf_one cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 s ulong to ulong
+k = cx_rd cb cv jb tjrn
+dz = vf_find jb k 68 s
+if ge dz k
+ret 0
+end
+ez = vf_find jb k 69 s
+if ge ez k
+ret 9
+end
+pn = vf_path jb k ez cb
+if eq pn 0
+ret 10
+end
+for t ulong sub 64 s
+s2 = add add s t 1
+e2 = vf_find jb k 69 s2
+if lt e2 k
+if lt vf_find jb k 68 s2 k
+if vf_same jb k e2 cb pn
+ret 0
+end
+end
+end
+end
+dl = vf_num jb dz 2
+dh = vf_num jb dz 3
+ret vf_chk cb cv jb pn dl dh
+end
+
+note vf_chk: the file WORK/<case>/repo/<cb[PB, PB + pn)> has length dl and FNV-1a 64 dh.
+fn vf_chk cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 pn ulong dl ulong dh ulong to ulong
+m = cx_pw cb cv PA trepos
+q = cx_cp cb add PA m PB pn
+r = rc_read view part cb PA sub q PA jb
+if lt r 0
+ret 11
+end
+if ne ulong r dl
+ret 12
+end
+if ne vf_fnv jb ulong r dh
+ret 13
+end
+ret 0
+end
+
+fn vf_fnv jb edit uchar 1048576 n ulong to ulong
+h = ulong 14695981039346656037
+for i ulong n
+h = mul xor h ulong get jb i 1099511628211
+end
+ret h
+end
+
+note vf_find: offset of the record "K s " in jb[0, k), else k.
+fn vf_find jb edit uchar 1048576 k ulong c uchar s ulong to ulong
+nd = new uchar 32 0
+p = rc_byte nd 0 10
+p = rc_byte nd p c
+p = rc_byte nd p 32
+p = rc_dec nd p s
+p = rc_byte nd p 32
+i = rc_find jb 0 k view part nd 0 p
+if ge i k
+ret k
+end
+ret add i 1
+end
+
+note vf_fld: start of field f of the record at o.
+fn vf_fld jb edit uchar 1048576 o ulong f ulong to ulong
+p = o
+c = ulong 0
+while lt c f bound 16
+while ne get jb p 32 bound 1048577
+p = add p 1
+end
+p = add p 1
+c = add c 1
+end
+ret p
+end
+
+fn vf_num jb edit uchar 1048576 o ulong f ulong to ulong
+a = vf_fld jb o f
+e = a
+while and ne get jb e 32 ne get jb e 10 bound 32
+e = add e 1
+end
+ret rc_num jb a sub e a
+end
+
+note vf_path: the hex path of the E record at o decoded into cb[PB); its length (0 bad).
+fn vf_path jb edit uchar 1048576 k ulong o ulong cb edit uchar 8192 to ulong
+a = vf_fld jb o 2
+e = a
+while and lt e k ne get jb e 10 bound 1024
+e = add e 1
+end
+if or eq e a ne rem sub e a 2 0
+ret 0
+end
+if gt sub e a 1024
+ret 0
+end
+x = new uchar 512 0
+m = rc_unhex jb a sub e a x
+if le m 0
+ret 0
+end
+for i ulong ulong m
+put cb add PB i get x i
+end
+ret ulong m
+end
+
+fn vf_same jb edit uchar 1048576 k ulong o ulong cb edit uchar 8192 pn ulong to bool
+x = new uchar 512 0
+for i ulong pn
+put x i get cb add PB i
+end
+n = vf_path jb k o cb
+r = and eq n pn rc_same view part x 0 pn view part cb PB pn
+for j ulong pn
+put cb add PB j get x j
+end
+ret r
+end
+
+note vf_git: `git -C repo status --porcelain -uall`: every changed path is a line of own.txt.
+fn vf_git cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to ulong
+m = cx_pw cb cv PA trepo
+pk_reset
+pk_add tgit
+pk_add tgc
+pk_add view part cb PA m
+pk_add tstat
+pk_add tpor
+pk_add tuall
+o = cx_pw cb cv PC tgito
+pid = cx_spawn cb 0 0 PC o
+if lt pid 0
+ret 14
+end
+if ne cx_wait pid 0
+ret 15
+end
+ret vf_gchk cb cv jb
+end
+
+fn vf_gchk cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to ulong
+ow = new uchar 4096 0
+n = cx_rd cb cv jb town
+for i ulong n bound 4096
+put ow i get jb i
+end
+k = cx_rd cb cv jb tgito
+p = ulong 0
+while lt p k bound 4097
+e = cx_eol0 jb p k
+if not vf_gl view part ow 0 n jb p e
+ret 16
+end
+p = add e 1
+end
+ret 0
+end
+
+fn cx_eol0 jb edit uchar 1048576 a ulong k ulong to ulong
+e = a
+while lt e k bound 1048577
+if eq get jb e 10
+ret e
+end
+e = add e 1
+end
+ret k
+end
+
+fn vf_gl ow view uchar * jb edit uchar 1048576 p ulong e ulong to bool
+if lt sub e p 4
+ret false
+end
+ret vf_own ow jb add p 3 sub e add p 3
+end
+
+fn vf_own ow view uchar * jb edit uchar 1048576 a ulong n ulong to bool
+p = ulong 0
+while lt p len ow bound 4097
+e = p
+while lt e len ow bound 4097
+if eq get ow e 10
+break
+end
+e = add e 1
+end
+if eq sub e p n
+if rc_same view part ow p n view part jb a n
+ret true
+end
+end
+p = add e 1
+end
+ret false
+end
+
+note ======== judge ========
+
+fn cx_nonce cb edit uchar 8192 cv edit ulong 32 to void
+r = new uchar 12 0
+x = random r 0 12 0
+p = ulong 4224
+for i ulong 12
+c = ulong get r i
+put cb p rc_hexd shr c 4
+put cb add p 1 rc_hexd and c 15
+p = add p 2
+end
+put cv 12 24
+end
+
+note cx_judge: the hidden judge of scenario sc on the case worktree; true for PASS.
+fn cx_judge cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 sc ulong to bool
+cx_nonce cb cv
+m = cx_pw cb cv PA trepo
+pk_reset
+pk_add tbw
+cx_pargs view part tbwa 0 sub len tbwa 1
+pk_add view part cb PA m
+pk_add view part cb PA m
+pk_add view part tbwb 0 sub len tbwb 1
+pk_add view part cb PA m
+pk_add view part tbwc 0 2
+pk_add tpy
+pk_add tbB
+j = cx_pj cb cv PB tjs2
+if eq sc 1
+j = cx_pj cb cv PB tjs1
+end
+pk_add view part cb PB j
+pk_add view part cb 4224 24
+o = cx_pw cb cv PC tjudo
+pid = cx_spawn cb 0 0 PC o
+if lt pid 0
+ret false
+end
+rc = cx_wait pid
+ret cx_jout cb cv jb rc
+end
+
+fn cx_jout cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 rc long to bool
+k = cx_rd cb cv jb tjudo
+nd = new uchar 26 0
+put nd 0 10
+for i ulong 24
+put nd add i 1 get cb add 4224 i
+end
+put nd 25 10
+f = rc_find jb 0 k view part nd 0 26
+f0 = false
+if ge k 25
+f0 = rc_same view part jb 0 25 view part nd 1 25
+end
+ret and eq rc 0 or lt f k f0
+end
+
+note cx_pargs: every newline-separated word of t as a packet argument.
+fn cx_pargs t view uchar * to void
+p = ulong 0
+while lt p len t bound 4097
+e = p
+while lt e len t bound 4097
+if eq get t e 10
+break
+end
+e = add e 1
+end
+pk_add view part t p sub e p
+p = add e 1
+end
+end
+
+note ======== results ========
+
+fn cx_res cv edit ulong 32 nm view uchar * ok bool step ulong to bool
+b = new uchar 160 0
+p = rc_cat b 0 tcase
+p = rc_cat b p nm
+if ok
+p = rc_cat b p tpass
+else
+p = rc_cat b p tfail
+p = rc_dec b p step
+p = rc_byte b p 10
+put cv 7 add get cv 7 1
+end
+put cv 6 add get cv 6 1
+rc_out view part b 0 p
+ret ok
+end
+
+note cx_chk: record the first failing step k when ok is false.
+fn cx_chk cv edit ulong 32 ok bool k ulong to bool
+if not ok
+if eq get cv 11 0
+put cv 11 k
+end
+end
+ret ok
+end
+
+fn cx_begin cb edit uchar 8192 cv edit ulong 32 nm view uchar * to void
+cx_name cb cv nm
+put cv 11 0
+end
+
+fn cx_end cv edit ulong 32 nm view uchar * to void
+st = get cv 11
+cx_stopfix cv
+x = cx_res cv nm eq st 0 st
+end
+
+note ======== SYNTHETIC cases ========
+
+note c_ref: setup scenario sc, run the reference script s to DONE; checks numbered from 1.
+fn c_ref cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 sc ulong s view uchar * to bool
+x = cx_chk cv cx_setup cb cv jb sc 1
+x = cx_chk cv cx_fix cb cv jb s 2
+rc = cx_run cb cv 801
+ret cx_chk cv eq rc 0 3
+end
+
+fn c1 cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to void
+cx_begin cb cv n1
+x = c_ref cb cv jb 1 sc1
+x = cx_chk cv eq cx_term cb cv jb 1 4
+x = cx_chk cv eq cx_ver cb cv jb 0 5
+x = cx_chk cv eq cx_jc cb cv jb kD 2 6
+x = cx_chk cv cx_judge cb cv jb 1 7
+cx_end cv n1
+end
+
+fn c2 cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to void
+cx_begin cb cv n2
+x = c_ref cb cv jb 2 sc2
+x = cx_chk cv eq cx_term cb cv jb 1 4
+x = cx_chk cv eq cx_ver cb cv jb 0 5
+x = cx_chk cv eq cx_jc cb cv jb ko1t 1 6
+x = cx_chk cv eq cx_jc cb cv jb ko4t 1 7
+x = cx_chk cv cx_judge cb cv jb 2 8
+cx_end cv n2
+end
+
+fn c3 cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to void
+cx_begin cb cv n3
+x = cx_chk cv cx_setup cb cv jb 2 1
+x = cx_chk cv cx_fix cb cv jb sc3 2
+pid = cx_cqa cb cv 801
+x = cx_chk cv cx_poll cb cv jb ki2 20000 3
+x = cx_chk cv eq cx_cancel cb cv 0 4
+rc = cx_wait pid
+x = cx_chk cv eq rc 0 5
+x = cx_chk cv eq cx_term cb cv jb 2 6
+x = cx_chk cv eq cx_jc cb cv jb kE 0 7
+x = cx_chk cv eq cx_ver cb cv jb 0 8
+k0 = cx_rd cb cv jb tjrn
+r2 = cx_run cb cv 802
+x = cx_chk cv eq cx_rd cb cv jb tjrn k0 9
+x = cx_chk cv not cx_judge cb cv jb 2 10
+cx_end cv n3
+end
+
+fn c4 cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to void
+cx_begin cb cv n4
+x = cx_chk cv cx_setup cb cv jb 1 1
+x = cx_chk cv cx_fix cb cv jb sc4 2
+pid = cx_cqa cb cv 801
+x = cx_chk cv cx_poll cb cv jb ki3 20000 3
+z = killpid int pid 9
+rc = cx_wait pid
+x = cx_chk cv eq rc 1009 4
+x = cx_chk cv eq cx_jc cb cv jb kd2 1 5
+x = cx_chk cv eq cx_jc cb cv jb kr3 0 6
+r2 = cx_run cb cv 802
+x = cx_chk cv eq r2 0 7
+x = cx_chk cv eq cx_term cb cv jb 1 8
+x = cx_chk cv eq cx_ver cb cv jb 0 9
+x = cx_chk cv eq cx_jc cb cv jb kd2 1 10
+x = cx_chk cv eq cx_cnt cb cv jb 1 kf6 1 11
+x = cx_chk cv eq cx_cnt cb cv jb 1 kf7 0 12
+x = cx_chk cv c4same cb cv jb 13
+x = cx_chk cv cx_judge cb cv jb 1 14
+cx_end cv n4
+end
+
+note c4same: the request re-sent after the kill (4) carries the same body as the killed one (3).
+fn c4same cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to bool
+k = cx_rd cb cv jb tfixo
+a = rc_find jb 0 k kf3
+b = rc_find jb 0 k kf4
+if or ge a k ge b k
+ret false
+end
+ea = cx_eol jb a k
+eb = cx_eol jb b k
+if ne sub ea a sub eb b
+ret false
+end
+ret c4eq jb add a 5 add b 5 sub ea add a 5
+end
+
+fn c4eq jb edit uchar 1048576 a ulong b ulong n ulong to bool
+for i ulong n
+if ne get jb add a i get jb add b i
+ret false
+end
+end
+ret true
+end
+
+
+fn cx_eol jb edit uchar 1048576 a ulong k ulong to ulong
+e = add a 1
+while lt e k bound 1048577
+if eq get jb e 10
+ret e
+end
+e = add e 1
+end
+ret k
+end
+
+note c_crash: c5 (crash=E) and c6 (crash=W): exit 77 inside the first write, resume, one D.
+fn c_crash cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 nm view uchar * oc ulong to void
+cx_begin cb cv nm
+x = cx_chk cv cx_setup cb cv jb 1 1
+x = cx_chk cv cx_fix cb cv jb sc1 2
+rc = cx_run cb cv add 801 mul oc 10
+x = cx_chk cv eq rc 77 3
+x = cx_chk cv eq cx_jc cb cv jb ke3 1 4
+x = cx_chk cv eq cx_jc cb cv jb kd3 0 5
+r2 = cx_run cb cv 802
+x = cx_chk cv eq r2 0 6
+x = cx_chk cv eq cx_term cb cv jb 1 7
+x = cx_chk cv eq cx_jc cb cv jb kd3 1 8
+x = cx_chk cv eq cx_ver cb cv jb 0 9
+x = cx_chk cv eq cx_cnt cb cv jb 1 kf6 1 10
+x = cx_chk cv eq cx_cnt cb cv jb 1 kf7 0 11
+x = cx_chk cv cx_judge cb cv jb 1 12
+cx_end cv nm
+end
+
+fn c7 cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to void
+cx_begin cb cv n7
+x = c_ref cb cv jb 2 sc7
+x = cx_chk cv eq cx_term cb cv jb 1 4
+x = cx_chk cv eq cx_jc cb cv jb ka1r 1 5
+x = cx_chk cv eq cx_jc cb cv jb kE 0 6
+x = cx_chk cv eq cx_ver cb cv jb 0 7
+x = cx_chk cv not cx_judge cb cv jb 2 8
+cx_end cv n7
+end
+
+fn c8 cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to void
+cx_begin cb cv n8
+x = c_ref cb cv jb 1 sc8
+x = cx_chk cv eq cx_term cb cv jb 4 4
+x = cx_chk cv eq cx_jc cb cv jb kn1c 1 5
+x = cx_chk cv eq cx_jc cb cv jb kE 0 6
+x = cx_chk cv eq cx_ver cb cv jb 0 7
+cx_end cv n8
+end
+
+fn c9 cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to void
+cx_begin cb cv n9
+x = cx_chk cv cx_setup cb cv jb 2 1
+x = cx_chk cv cx_fix cb cv jb sc9 2
+rc = cx_run cb cv 301
+x = cx_chk cv eq rc 0 3
+x = cx_chk cv eq cx_term cb cv jb 3 4
+x = cx_chk cv eq cx_jc cb cv jb kona 3 5
+x = cx_chk cv eq cx_ver cb cv jb 0 6
+cx_end cv n9
+end
+
+fn c10 cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to void
+cx_begin cb cv n10
+x = c_ref cb cv jb 1 sc10
+x = cx_chk cv eq cx_term cb cv jb 1 4
+x = cx_chk cv eq cx_jc cb cv jb kobad 4 5
+x = cx_chk cv eq cx_jc cb cv jb kE 0 6
+x = cx_chk cv eq cx_ver cb cv jb 0 7
+cx_end cv n10
+end
+
+fn c11 cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to void
+cx_begin cb cv n11
+x = cx_chk cv cx_setup cb cv jb 2 1
+x = cx_chk cv not cx_judge cb cv jb 2 2
+x = cx_chk cv cx_setup2 cb cv jb 3
+cx_end cv n11
+end
+
+note cx_setup2: the S1 judge on an unmodified S1 worktree must fail too (c11 runs both judges).
+fn cx_setup2 cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to bool
+cx_name cb cv n11b
+if not cx_setup cb cv jb 1
+ret false
+end
+ret not cx_judge cb cv jb 1
+end
+
+
+fn c12 cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to void
+cx_begin cb cv n12
+x = c_ref cb cv jb 1 sc1
+x = cx_chk cv eq cx_ver cb cv jb 0 4
+x = cx_chk cv c12tamp cb cv jb tnorm 5
+x = cx_chk cv ne cx_ver cb cv jb 0 6
+x = cx_chk cv c12undo cb cv jb 7
+x = cx_chk cv eq cx_ver cb cv jb 0 8
+x = cx_chk cv c12tamp cb cv jb tstray 9
+x = cx_chk cv eq cx_ver cb cv jb 16 10
+cx_end cv n12
+end
+
+note c12tamp: append one byte to WORK/<case><sfx> (created when absent).
+fn c12tamp cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 sfx view uchar * to bool
+n = cx_pw cb cv PC sfx
+r = rc_append view part cb PC n tx 1
+ret eq r 0
+end
+
+fn c12undo cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to bool
+k = cx_rd cb cv jb tnorm
+if eq k 0
+ret false
+end
+n = cx_pw cb cv PC tnorm
+fd = fopen cb PC n 524865 420
+if lt fd 0
+ret false
+end
+r = rc_wall int fd jb sub k 1
+c = fclose int fd
+ret eq r 0
+end
+
+note c13: a torn journal tail (a partial D line without its newline, as a crash mid-append leaves
+note it) is cut on restart and the effect is recorded once, well-formed.
+fn c13 cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to void
+cx_begin cb cv n13
+x = cx_chk cv cx_setup cb cv jb 1 1
+x = cx_chk cv cx_fix cb cv jb sc1 2
+rc = cx_run cb cv 811
+x = cx_chk cv eq rc 77 3
+n = cx_pw cb cv PC tjrn
+r = rc_append view part cb PC n ttorn len ttorn
+x = cx_chk cv eq r 0 4
+r2 = cx_run cb cv 802
+x = cx_chk cv eq r2 0 5
+x = cx_chk cv eq cx_term cb cv jb 1 6
+x = cx_chk cv eq cx_jc cb cv jb kd3 1 7
+x = cx_chk cv eq cx_ver cb cv jb 0 8
+x = cx_chk cv cx_judge cb cv jb 1 9
+cx_end cv n13
+end
+
+fn cx_synth cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to void
+c1 cb cv jb
+c2 cb cv jb
+c3 cb cv jb
+c4 cb cv jb
+c_crash cb cv jb n5 1
+c_crash cb cv jb n6 2
+c7 cb cv jb
+c8 cb cv jb
+c9 cb cv jb
+c10 cb cv jb
+c11 cb cv jb
+c12 cb cv jb
+c13 cb cv jb
+end
+
+note ======== REAL cases (own model on 127.0.0.1:PORT) ========
+
+fn r_obs cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 nm view uchar * sc ulong to void
+b = new uchar 256 0
+p = rc_cat b 0 tobs
+p = rc_cat b p nm
+p = rc_cat b p tost
+p = rc_dec b p cx_term cb cv jb
+p = rc_cat b p tosd
+p = rc_dec b p cx_jc cb cv jb kD
+p = rc_cat b p tosr
+p = rc_dec b p cx_jc cb cv jb kR
+p = rc_cat b p toj
+if cx_judge cb cv jb sc
+p = rc_cat b p tojp
+else
+p = rc_cat b p tojf
+end
+p = rc_byte b p 10
+rc_out view part b 0 p
+end
+
+
+fn r_plain cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 nm view uchar * sc ulong to void
+cx_begin cb cv nm
+x = cx_chk cv cx_setup cb cv jb sc 1
+rc = cx_run cb cv 601
+x = cx_chk cv eq rc 0 2
+t = cx_term cb cv jb
+x = cx_chk cv or or eq t 1 eq t 3 eq t 4 3
+x = cx_chk cv eq cx_ver cb cv jb 0 4
+r_obs cb cv jb nm sc
+cx_end cv nm
+end
+
+fn r3 cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to void
+cx_begin cb cv m3
+x = cx_chk cv cx_setup cb cv jb 2 1
+pid = cx_cqa cb cv 601
+x = cx_chk cv cx_poll cb cv jb ki1 120000 2
+z = sleepns 2000000000
+x = cx_chk cv eq cx_cancel cb cv 0 3
+rc = cx_wait pid
+x = cx_chk cv eq rc 0 4
+t = cx_term cb cv jb
+x = cx_chk cv or eq t 2 eq t 4 5
+x = cx_chk cv eq cx_jc cb cv jb kE 0 6
+x = cx_chk cv eq cx_ver cb cv jb 0 7
+r_obs cb cv jb m3 2
+cx_end cv m3
+end
+
+fn r4 cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to void
+cx_begin cb cv m4
+x = cx_chk cv cx_setup cb cv jb 1 1
+pid = cx_cqa cb cv 601
+x = cx_chk cv cx_poll cb cv jb ki1 120000 2
+z = sleepns 2000000000
+k = killpid int pid 9
+rc = cx_wait pid
+x = cx_chk cv eq rc 1009 3
+x = cx_chk cv eq cx_jc cb cv jb kr1 0 4
+r2 = cx_run cb cv 602
+x = cx_chk cv eq r2 0 5
+t = cx_term cb cv jb
+x = cx_chk cv or or eq t 1 eq t 3 eq t 4 6
+x = cx_chk cv le cx_jc cb cv jb kr1 1 7
+x = cx_chk cv eq cx_ver cb cv jb 0 8
+r_obs cb cv jb m4 1
+cx_end cv m4
+end
+
+fn cx_real cb edit uchar 8192 cv edit ulong 32 jb edit uchar 1048576 to void
+r_plain cb cv jb m1 1
+r_plain cb cv jb m2 2
+r3 cb cv jb
+r4 cb cv jb
+end
+
+note ======== main ========
+
+fn cx_arg cb edit uchar 8192 cv edit ulong 32 i ulong ds ulong slot ulong to bool
+n = rc_arg i part cb ds 1000
+if lt n 1
+ret false
+end
+put cv slot ulong n
+ret true
+end
+
+fn cx_sum cv edit ulong 32 to int
+b = new uchar 128 0
+p = rc_cat b 0 tsum1
+if eq get cv 8 1
+p = rc_cat b p tsynl
+else
+p = rc_cat b p treall
+end
+if eq get cv 7 0
+p = rc_cat b p tsum2
+p = rc_dec b p get cv 6
+p = rc_byte b p 10
+rc_out view part b 0 p
+ret 0
+end
+p = rc_cat b p tsum3
+p = rc_dec b p get cv 7
+p = rc_cat b p tsum4
+p = rc_dec b p get cv 6
+p = rc_byte b p 10
+rc_out view part b 0 p
+ret 1
+end
+
+fn main to int
+cb = new uchar 8192 0
+cv = new ulong 32 0
+jb = new uchar 1048576 0
+mb = new uchar 16 0
+n = rc_arg 1 mb
+na = ulong argcnt
+if lt n 1
+rc_out tusage
+ret 2
+end
+if rc_is mb 0 ulong n tsyn
+put cv 8 1
+end
+if rc_is mb 0 ulong n trl
+put cv 8 2
+end
+if or eq get cv 8 0 lt na 6
+rc_out tusage
+ret 2
+end
+a1 = cx_arg cb cv 2 0 0
+a2 = cx_arg cb cv 3 1024 1
+a3 = cx_arg cb cv 4 2048 2
+a4 = cx_arg cb cv 5 3072 3
+if not and and a1 a2 and a3 a4
+rc_out tusage
+ret 2
+end
+mk = makedir cb 1024 get cv 1 448
+if eq get cv 8 1
+cx_synth cb cv jb
+ret cx_sum cv
+end
+if lt na 7
+rc_out tusage
+ret 2
+end
+a5 = cx_arg cb cv 6 4096 4
+cx_real cb cv jb
+ret cx_sum cv
+end
