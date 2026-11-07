@@ -1,0 +1,7 @@
+id	must_fail	build_rc	rpcase_rc	observed	verdict
+unknown	c9	0	1	FAIL	KILLED
+schema	c8	0	1	FAIL	KILLED
+stale	c7	0	1	FAIL	KILLED
+cancel	c5	0	1	FAIL	KILLED
+rewrite	c3	0	1	FAIL	KILLED
+torn	c14	0	1	FAIL	KILLED

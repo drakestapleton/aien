@@ -1,0 +1,15 @@
+CASE c1 happy-path PASS
+CASE c2 crash-after-intent-restart PASS
+CASE c3 crash-after-effect-restart PASS
+CASE c4 sigkill-during-inference-restart PASS
+CASE c5 cancel-during-inference PASS
+CASE c6 cancel-kill-restart PASS
+CASE c7 stale-memory-correction-restart PASS
+CASE c8 invalid-tool-arguments PASS
+CASE c9 uncertain-outcome-unknown FAIL step 12
+CASE c10 notify-happy-path PASS
+CASE c11 no-tool-call PASS
+CASE c12 verifier-negative-artifact-tamper PASS
+CASE c13 verifier-negative-stray-file PASS
+CASE c14 torn-journal-tail-restart PASS
+RPCASE SYNTHETIC FAIL failed=1 cases=14

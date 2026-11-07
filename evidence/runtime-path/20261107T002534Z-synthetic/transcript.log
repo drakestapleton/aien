@@ -1,0 +1,28 @@
+label SYNTHETIC
+repo f53db12138fd39527d94c9f22ce047071ebf3c7f dirty=0
+omc 3ad9f10f64309e7acf8a725082b28e23a2a4aeb07e98322fb4dc0fcd8fc93194
+host Linux 7.0.0-1019-nvidia aarch64
+started 20261107T002534Z
+CASE c1 happy-path PASS
+CASE c2 crash-after-intent-restart PASS
+CASE c3 crash-after-effect-restart PASS
+CASE c4 sigkill-during-inference-restart PASS
+CASE c5 cancel-during-inference PASS
+CASE c6 cancel-kill-restart PASS
+CASE c7 stale-memory-correction-restart PASS
+CASE c8 invalid-tool-arguments PASS
+CASE c9 uncertain-outcome-unknown PASS
+CASE c10 notify-happy-path PASS
+CASE c11 no-tool-call PASS
+CASE c12 verifier-negative-artifact-tamper PASS
+CASE c13 verifier-negative-stray-file PASS
+CASE c14 torn-journal-tail-restart PASS
+RPCASE SYNTHETIC PASS cases=14
+id	must_fail	build_rc	rpcase_rc	observed	verdict
+unknown	c9	0	1	FAIL	KILLED
+schema	c8	0	1	FAIL	KILLED
+stale	c7	0	1	FAIL	KILLED
+cancel	c5	0	1	FAIL	KILLED
+rewrite	c3	0	1	FAIL	KILLED
+torn	c14	0	1	FAIL	KILLED
+GATE SYNTHETIC PASS cases=14 mutants=6/6

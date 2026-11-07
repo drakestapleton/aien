@@ -1,0 +1,1 @@
+unit=celsius value=21

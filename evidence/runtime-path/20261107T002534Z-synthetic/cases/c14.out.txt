@@ -1,0 +1,2 @@
+rpath: cut a torn last journal line
+RP 1 1
