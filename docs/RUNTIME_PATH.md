@@ -1,7 +1,10 @@
 # Runtime path acceptance harness (DRA-172)
 
-Status: IN_REVIEW. Qualification: SYNTHETIC PASS (interfaces only). REAL: see the newest
-`evidence/runtime-path/*-real/` run, or NOT_RUN when none exists.
+Status: IN_REVIEW. Qualification:
+- SYNTHETIC: PASS (interfaces only).
+- REAL: PASS for the runtime invariants against own rung-10 ck60000.
+- REAL typed-tool → artifact leg: NOT_RUN. The own checkpoint emits no tool call yet.
+See `evidence/runtime-path/README.md`.
 
 One request goes through the whole runtime path:
 

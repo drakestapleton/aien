@@ -1,0 +1,9 @@
+OBSERVED r1 real-request 5 0 0 0 1
+CASE r1 real-request PASS
+OBSERVED r2 real-sigkill-during-inference-restart 5 0 0 0 2
+CASE r2 real-sigkill-during-inference-restart PASS
+OBSERVED r3 real-stale-memory-correction-restart 5 0 0 0 2
+CASE r3 real-stale-memory-correction-restart PASS
+OBSERVED r4 real-cancel-during-inference 2 0 0 0 1
+CASE r4 real-cancel-during-inference PASS
+RPCASE REAL PASS cases=4

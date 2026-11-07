@@ -1,0 +1,17 @@
+label REAL
+repo 5a562a83eab1376d3020d79b8db021a0b22c4f46 dirty=0
+omc 3ad9f10f64309e7acf8a725082b28e23a2a4aeb07e98322fb4dc0fcd8fc93194
+host Linux 7.0.0-1019-nvidia aarch64
+started 20261107T005448Z
+model ollm serve (aien-train main 0518c915dea370b3bffbb90d579b1daa5ba8b8f5, binary sha256 819664d5a2284189cd9baca67681675ed2b4685e19d1d976ce071b0f6fcaa5ea) own Omega LLM rung-10 ck60000 sha256 a53ced7265818c8f6197449315e9ca4082721665022fec4f81d4538e8d6c2d0f (T=256, d=384, 12 layers) tokenizer merges4096 OLLMTOK sha256 73a29baf97619a746a21232c403bf08af71a76e48b3b2cde6d64dab766083882; private netns port 18293; CPU only
+port 18293
+OBSERVED r1 real-request 5 0 0 0 1
+CASE r1 real-request PASS
+OBSERVED r2 real-sigkill-during-inference-restart 5 0 0 0 2
+CASE r2 real-sigkill-during-inference-restart PASS
+OBSERVED r3 real-stale-memory-correction-restart 5 0 0 0 2
+CASE r3 real-stale-memory-correction-restart PASS
+OBSERVED r4 real-cancel-during-inference 2 0 0 0 1
+CASE r4 real-cancel-during-inference PASS
+RPCASE REAL PASS cases=4
+GATE REAL PASS
