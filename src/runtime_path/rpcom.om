@@ -1,0 +1,250 @@
+note SPDX-License-Identifier: AGPL-3.0-or-later
+note rpcom.om: byte, number and file helpers shared by the runtime-path programs (DRA-172).
+note No policy lives here: journal semantics, schema checks, hashing and verification are in
+note the program that owns them. Every function is bounded by the length of its arrays.
+
+note rc_cat: s copied into b at p; the new end. Over capacity traps 3 (a caller bug, never data).
+fn rc_cat b edit uchar * p ulong s view uchar * to ulong
+if gt add p len s len b
+trap 3
+end
+for i ulong len s
+put b add p i get s i
+end
+ret add p len s
+end
+
+fn rc_byte b edit uchar * p ulong c uchar to ulong
+put b p c
+ret add p 1
+end
+
+note rc_dec: decimal digits of v into b at p; the new end.
+fn rc_dec b edit uchar * p ulong v ulong to ulong
+d = new uchar 20 0
+k = ulong 0
+x = v
+while true bound 21
+put d k uchar add rem x 10 48
+k = add k 1
+x = div x 10
+if eq x 0
+break
+end
+end
+q = p
+for i ulong k
+put b q get d sub sub k 1 i
+q = add q 1
+end
+ret q
+end
+
+fn rc_hexd v ulong to uchar
+if lt v 10
+ret uchar add v 48
+end
+ret uchar add v 87
+end
+
+note rc_hex: all of s as lowercase hex into b at p; "-" when s is empty. The new end.
+fn rc_hex b edit uchar * p ulong s view uchar * to ulong
+if eq len s 0
+ret rc_byte b p 45
+end
+q = p
+for i ulong len s
+c = ulong get s i
+q = rc_byte b q rc_hexd shr c 4
+q = rc_byte b q rc_hexd and c 15
+end
+ret q
+end
+
+fn rc_hexv c uchar to ulong
+if and ge c 48 le c 57
+ret ulong sub c 48
+end
+if and ge c 97 le c 102
+ret ulong add sub c 97 10
+end
+ret 16
+end
+
+note rc_unhex: the hex field s[off, off + n) decoded into o; byte count, 0 for "-", -1 when malformed or too long.
+fn rc_unhex s view uchar * off ulong n ulong o edit uchar * to long
+if and eq n 1 eq get s off 45
+ret 0
+end
+if or eq n 0 ne rem n 2 0
+ret -1
+end
+m = div n 2
+if gt m len o
+ret -1
+end
+for i ulong m
+a = rc_hexv get s add off mul i 2
+b = rc_hexv get s add add off mul i 2 1
+if or gt a 15 gt b 15
+ret -1
+end
+put o i uchar or shl a 4 b
+end
+ret long m
+end
+
+note rc_num: decimal s[off, off + n), 1 .. 20 digits, at most 2^64 - 1 (no wrap); 18446744073709551615
+note (the maximum, never a valid id or count here) when malformed or too large.
+fn rc_num s view uchar * off ulong n ulong to ulong
+bad = ulong 18446744073709551615
+if or eq n 0 gt n 20
+ret bad
+end
+v = ulong 0
+for i ulong n
+c = get s add off i
+if or lt c 48 gt c 57
+ret bad
+end
+d = ulong sub c 48
+if rc_ovf v d
+ret bad
+end
+v = add mul v 10 d
+end
+ret v
+end
+
+note rc_ovf: v * 10 + d would exceed 2^64 - 1 (Wolfram: QuotientRemainder[2^64-1, 10] = {1844674407370955161, 5}).
+fn rc_ovf v ulong d ulong to bool
+q = ulong 1844674407370955161
+if gt v q
+ret true
+end
+ret and eq v q gt d 5
+end
+
+note rc_same: a and b hold the same bytes.
+fn rc_same a view uchar * b view uchar * to bool
+if ne len a len b
+ret false
+end
+for i ulong len a
+if ne get a i get b i
+ret false
+end
+end
+ret true
+end
+
+note rc_is: s[off, off + n) equals the whole of t (false when out of range).
+fn rc_is s view uchar * off ulong n ulong t view uchar * to bool
+if or ne n len t gt add off n len s
+ret false
+end
+ret rc_same view part s off n t
+end
+
+note rc_find: first index i in [from, lim) where nd occurs in h, else lim.
+fn rc_find h view uchar * from ulong lim ulong nd view uchar * to ulong
+if or eq len nd 0 gt lim len h
+ret lim
+end
+if or gt from lim lt sub lim from len nd
+ret lim
+end
+last = sub lim len nd
+i = from
+while le i last bound 16777217
+if rc_same view part h i len nd nd
+ret i
+end
+i = add i 1
+end
+ret lim
+end
+
+note rc_wall: all of b[0, n) written to fd; 0 or a negative result.
+fn rc_wall fd int b view uchar * n ulong to long
+o = ulong 0
+while lt o n bound 16777217
+r = write fd b o sub n o
+if le r 0
+if eq r 0
+ret -5
+end
+ret r
+end
+o = add o ulong r
+end
+ret 0
+end
+
+fn rc_out s view uchar * to void
+x = rc_wall 1 s len s
+end
+
+note rc_read: the file at path p into b; its length, a negative errno, or -27 when it does not fit.
+fn rc_read p view uchar * b edit uchar * to long
+fd = fopen p 0 len p 524288 0
+if lt fd 0
+ret fd
+end
+o = ulong 0
+for i ulong 16777216
+if ge o len b
+c = fclose int fd
+ret -27
+end
+r = read int fd b o sub len b o
+if lt r 0
+c = fclose int fd
+ret r
+end
+if eq r 0
+break
+end
+o = add o ulong r
+end
+c = fclose int fd
+ret long o
+end
+
+note rc_append: b[0, n) appended durably to the file at p (O_APPEND, created 0600, fsync before close).
+fn rc_append p view uchar * b view uchar * n ulong to long
+fd = fopen p 0 len p 525377 384
+if lt fd 0
+ret fd
+end
+r = rc_wall int fd b n
+if lt r 0
+c = fclose int fd
+ret r
+end
+s = fsync int fd
+c = fclose int fd
+if lt s 0
+ret s
+end
+ret 0
+end
+
+note rc_arg: argument i into b; its length, or a negative result.
+fn rc_arg i ulong b edit uchar * to long
+if ge i ulong argcnt
+ret -2
+end
+ret argread i b 0 len b
+end
+
+note rc_fsdir: fsync the directory at p (makes a rename or a new file entry durable).
+fn rc_fsdir p view uchar * to long
+fd = fopen p 0 len p 540672 0
+if lt fd 0
+ret fd
+end
+s = fsync int fd
+c = fclose int fd
+ret s
+end

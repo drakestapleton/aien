@@ -1,0 +1,1437 @@
+note SPDX-License-Identifier: AGPL-3.0-or-later
+note rpath.om: the DRA-172 runtime path. One request goes to a local model server
+note (POST /v1/chat/completions on 127.0.0.1:PORT), the answer's tool call is schema-checked
+note against the typed tool registry below, the tool's effect is performed once, and every step
+note is an fsync'd line of an append-only journal, so a killed process restarts from the journal
+note without repeating an effect. Memory is a second append-only log whose effective values
+note (the last record of each key) go into every prompt; a correction is a later record.
+note Compose: { printf 'om2\n'; cat vendor/json.om vendor/jsonw.om vendor/http.om vendor/notls.om
+note rpcom.om rpath.om; } | omc > rpath (tests/runtime_path/build.sh checks every pin).
+note
+note Commands (DIR is the state directory; exit 0 ok, 2 usage, 3 I/O, 4 refused input):
+note   rpath init DIR                       make DIR, DIR/out, DIR/sink (mode 0700)
+note   rpath submit DIR ID TEXT             journal Q: one request, ID 1..999999 unique
+note   rpath cancel DIR ID                  journal X: cancel request ID
+note   rpath remember DIR KEY VALUE         memory M: KEY, VALUE in [a-z0-9_], 1..32 bytes
+note   rpath run DIR PORT [crash=C] [maxtok=N]   process every open request; C in I R E W
+note   rpath status DIR                     one `S id state nE nD nU attempts` line per request
+note Journal records (one line each, fields split by one space, free text as lowercase hex):
+note   Q id text | X id | I id attempt memgen | R id attempt memgen tool args content
+note   N id attempt code | A id 1 | A id 0 code | E id tool | D id tool len fnv64 recovered
+note   U id tool | T id state
+note tool: 1 write_artifact (idempotent: temp file, fsync, rename without replacement, so the
+note artifact is absent or complete), 2 notify (one line to a write-only sink the runtime never
+note reads back: an interrupted notify is UNKNOWN and is never retried).
+note state: 1 DONE 2 CANCELLED 3 REJECTED 4 UNKNOWN 5 NOTOOL 6 FAILED.
+note A torn last journal line (no newline) is cut off on load before anything else happens.
+note crash=C exits 77 right after the named step is durable: I inference started, R inference
+note result recorded, E effect intent recorded, W effect performed but D not yet recorded.
+
+text tjrn "/journal.log"
+text tmemf "/memory.log"
+text tout "/out"
+text toutd "/out/"
+text tsink "/sink"
+text tsnkf "/sink/notify.log"
+text ttmp "/out/.tmp-"
+text tinit "init"
+text tsubm "submit"
+text tcanc "cancel"
+text tremb "remember"
+text trun "run"
+text tstat "status"
+text tcrash "crash="
+text tmaxt "maxtok="
+text tpost "POST"
+text tchat "/v1/chat/completions"
+text thost "Host"
+text tloc "127.0.0.1"
+text tctype "Content-Type"
+text tjson "application/json"
+text kmodel "model"
+text vmodel "ollm"
+text kmaxt "max_tokens"
+text ktemp "temperature"
+text vzero "0"
+text kmsgs "messages"
+text krole "role"
+text kcont "content"
+text vsys "system"
+text vuser "user"
+text ktools "tools"
+text ktype "type"
+text vfunc "function"
+text kname "name"
+text kdesc "description"
+text kparams "parameters"
+text vobj "object"
+text kprops "properties"
+text vstr "string"
+text kreq "required"
+text kaddp "additionalProperties"
+text ktchoi "tool_choice"
+text vauto "auto"
+text kchoi "choices"
+text kmsg "message"
+text ktcalls "tool_calls"
+text kargs "arguments"
+text ktext "text"
+text kchan "channel"
+text vops "ops"
+text twart "write_artifact"
+text tnotif "notify"
+text dwart "Write one UTF-8 text artifact named name (a-z 0-9 . _ -) into the task output directory."
+text dnotif "Send one message to an operator channel (only ops). Delivery cannot be read back."
+text tsys1 "You are the Aien runtime-path agent (DRA-172). Answer the request with exactly one tool call."
+text tsys2 " memory:"
+text tsp " "
+text teq "="
+text trp "RP "
+text tsl "S "
+text tnl "\n"
+text tbadarg "rpath: usage: init|submit|cancel|remember|run|status DIR ...\n"
+text trepair "rpath: cut a torn last journal line\n"
+
+note ======== context ========
+note gd: the state directory path (gv 1 bytes). gv: 0 journal length, 1 dir length, 2 port,
+note 3 crash letter, 4 memgen, 5 max tokens, 6 memory length, 7 torn lines cut, 8 current id,
+note 9 current attempt, 20 .. 27 record values for rp_rk.
+
+note rp_path: dir + s into pb; the length.
+fn rp_path gd edit uchar 512 gv edit ulong 32 s view uchar * pb edit uchar 1024 to ulong
+p = rc_cat pb 0 view part gd 0 get gv 1
+ret rc_cat pb p s
+end
+
+note rp_rec: one complete line appended durably to the journal.
+fn rp_rec gd edit uchar 512 gv edit ulong 32 lb view uchar * to long
+pb = new uchar 1024 0
+n = rp_path gd gv tjrn pb
+ret rc_append view part pb 0 n lb len lb
+end
+
+note rp_rk: the record `t v20 .. v(20+k-1)` appended; 0 or a negative result (also fails the run).
+fn rp_rk gd edit uchar 512 gv edit ulong 32 t uchar k ulong to long
+lb = new uchar 256 0
+p = rc_byte lb 0 t
+for i ulong k
+p = rc_byte lb p 32
+p = rc_dec lb p get gv add 20 i
+end
+p = rc_byte lb p 10
+ret rp_rec gd gv view part lb 0 p
+end
+
+fn rp_crash gv edit ulong 32 c uchar to void
+if eq get gv 3 ulong c
+exit 77
+end
+end
+
+note ======== journal load and fields ========
+
+note rp_jload: the journal into jb (absent is empty). A last line without its newline is cut
+note off the file and the buffer first. 0 or a negative result.
+fn rp_jload gd edit uchar 512 gv edit ulong 32 jb edit uchar 1048576 to long
+pb = new uchar 1024 0
+n = rp_path gd gv tjrn pb
+r = rc_read view part pb 0 n jb
+if eq r -2
+put gv 0 0
+ret 0
+end
+if lt r 0
+ret r
+end
+m = ulong r
+if eq m 0
+put gv 0 0
+ret 0
+end
+if ne get jb sub m 1 10
+k = m
+while gt k 0 bound 1048577
+if eq get jb sub k 1 10
+break
+end
+k = sub k 1
+end
+fd = fopen pb 0 n 524289 0
+if lt fd 0
+ret fd
+end
+t = ftrunc int fd long k
+s = fsync int fd
+c = fclose int fd
+if or lt t 0 lt s 0
+ret -5
+end
+put gv 7 add get gv 7 1
+rc_out trepair
+m = k
+end
+put gv 0 m
+ret 0
+end
+
+note rp_eol: the newline ending the line that starts at p (n when absent).
+fn rp_eol jb edit uchar 1048576 p ulong n ulong to ulong
+i = p
+while lt i n bound 1048577
+if eq get jb i 10
+ret i
+end
+i = add i 1
+end
+ret n
+end
+
+note rp_fs: start of field k of the line [p, e) (e when absent).
+fn rp_fs jb edit uchar 1048576 p ulong e ulong k ulong to ulong
+i = p
+f = ulong 0
+while lt i e bound 1048577
+if eq f k
+ret i
+end
+if eq get jb i 32
+f = add f 1
+end
+i = add i 1
+end
+ret e
+end
+
+fn rp_fe jb edit uchar 1048576 s ulong e ulong to ulong
+i = s
+while lt i e bound 1048577
+if eq get jb i 32
+ret i
+end
+i = add i 1
+end
+ret e
+end
+
+fn rp_fnum jb edit uchar 1048576 p ulong e ulong k ulong to ulong
+s = rp_fs jb p e k
+f = rp_fe jb s e
+ret rc_num jb s sub f s
+end
+
+note rp_scan: the derived state of request id into sv: 0 has Q, 1 Q start, 2 cancelled,
+note 3 last I attempt, 4 its memgen, 5 last R attempt, 6 its memgen, 7 R start, 8 A (1 ok,
+note 2 rejected), 9 E count, 10 E tool, 11 D count, 12 U count, 13 terminal state, 14 N count,
+note 15 R end, 16 Q end.
+fn rp_scan jb edit uchar 1048576 n ulong id ulong sv edit ulong 40 to void
+for i ulong 40
+put sv i 0
+end
+p = ulong 0
+while lt p n bound 1048577
+e = rp_eol jb p n
+if eq rp_fnum jb p e 1 id
+rp_one jb p e sv
+end
+p = add e 1
+end
+end
+
+fn rp_one jb edit uchar 1048576 p ulong e ulong sv edit ulong 40 to void
+t = get jb p
+if eq t 81
+put sv 0 1
+put sv 1 p
+put sv 16 e
+end
+if eq t 88
+put sv 2 1
+end
+if eq t 73
+put sv 3 rp_fnum jb p e 2
+put sv 4 rp_fnum jb p e 3
+end
+if eq t 82
+put sv 5 rp_fnum jb p e 2
+put sv 6 rp_fnum jb p e 3
+put sv 7 p
+put sv 15 e
+end
+if eq t 78
+put sv 14 add get sv 14 1
+end
+if eq t 65
+put sv 8 2
+if eq rp_fnum jb p e 2 1
+put sv 8 1
+end
+end
+if eq t 69
+put sv 9 add get sv 9 1
+put sv 10 rp_fnum jb p e 2
+end
+if eq t 68
+put sv 11 add get sv 11 1
+end
+if eq t 85
+put sv 12 add get sv 12 1
+end
+if eq t 84
+put sv 13 rp_fnum jb p e 2
+end
+end
+
+note rp_field: field k of the line [p, e) decoded from hex into o; byte count or -1.
+fn rp_field jb edit uchar 1048576 p ulong e ulong k ulong o edit uchar * to long
+s = rp_fs jb p e k
+f = rp_fe jb s e
+ret rc_unhex jb s sub f s o
+end
+
+note ======== memory ========
+
+fn rp_word s view uchar * to bool
+if or eq len s 0 gt len s 32
+ret false
+end
+for i ulong len s
+c = get s i
+ok = or or and ge c 97 le c 122 and ge c 48 le c 57 eq c 95
+if not ok
+ret false
+end
+end
+ret true
+end
+
+note rp_mload: memory.log into mb; gv 4 = memgen (complete M lines), gv 6 = length.
+fn rp_mload gd edit uchar 512 gv edit ulong 32 mb edit uchar 65536 to long
+pb = new uchar 1024 0
+n = rp_path gd gv tmemf pb
+r = rc_read view part pb 0 n mb
+put gv 4 0
+put gv 6 0
+if eq r -2
+ret 0
+end
+if lt r 0
+ret r
+end
+m = ulong r
+g = ulong 0
+k = ulong 0
+for i ulong m
+if eq get mb i 10
+g = add g 1
+k = add i 1
+end
+end
+put gv 4 g
+put gv 6 k
+ret 0
+end
+
+note rp_mkey: the key of the memory line starting at p equals the key at q (both end at a space).
+fn rp_mkey mb edit uchar 65536 p ulong q ulong to bool
+for i ulong 33
+a = get mb add add p 2 i
+b = get mb add add q 2 i
+if ne a b
+ret false
+end
+if eq a 32
+ret true
+end
+end
+ret false
+end
+
+note rp_lend: the newline ending the memory line at p (n when absent).
+fn rp_lend mb edit uchar 65536 n ulong p ulong to ulong
+e = p
+while lt e n bound 65537
+if eq get mb e 10
+ret e
+end
+e = add e 1
+end
+ret n
+end
+
+note rp_live: no later memory line has the key of the line at p (it is the effective record).
+fn rp_live mb edit uchar 65536 n ulong p ulong to bool
+r = add rp_lend mb n p 1
+while lt r n bound 65537
+if rp_mkey mb p r
+ret false
+end
+r = add rp_lend mb n r 1
+end
+ret true
+end
+
+note rp_mpair: ` key=value` of the memory line [p, e) into o at q; the new end.
+fn rp_mpair mb edit uchar 65536 p ulong e ulong o edit uchar 4096 q ulong to ulong
+w = rc_byte o q 32
+for i ulong sub e add p 2
+c = get mb add add p 2 i
+if eq c 32
+c = 61
+end
+w = rc_byte o w c
+end
+ret w
+end
+
+note rp_mtext: the effective memory as ` key=value` pairs (the last record of each key) into o at w.
+fn rp_mtext mb edit uchar 65536 n ulong o edit uchar 4096 w ulong to ulong
+q = w
+p = ulong 0
+while lt p n bound 65537
+e = rp_lend mb n p
+if rp_live mb n p
+q = rp_mpair mb p e o q
+end
+p = add e 1
+end
+ret q
+end
+
+note ======== inference ========
+
+note rp_mem: the value token of member key in object o, else jsnone.
+fn rp_mem src view uchar * tp view uint 65552 o ulong key view uchar * to ulong
+if eq o jsnone
+ret jsnone
+end
+if ne js_type tp o jsobj
+ret jsnone
+end
+k = js_first tp o
+for i ulong 16384
+if eq k jsnone
+ret jsnone
+end
+if js_streq src js_off tp k key
+ret add k 1
+end
+k = js_mnext tp k
+end
+ret jsnone
+end
+
+fn rp_kv ob edit uchar * k view uchar * v view uchar * to void
+js_wsbuf ob k 0 len k
+js_wsbuf ob v 0 len v
+end
+
+note rp_tx: string sel of tool tc: 0 name, 1 description, 2 first member, 3 second member.
+fn rp_tx ob edit uchar * tc ulong sel ulong to void
+if eq tc 1
+if eq sel 0
+js_wsbuf ob twart 0 len twart
+end
+if eq sel 1
+js_wsbuf ob dwart 0 len dwart
+end
+if eq sel 2
+js_wsbuf ob kname 0 len kname
+end
+if eq sel 3
+js_wsbuf ob ktext 0 len ktext
+end
+else
+if eq sel 0
+js_wsbuf ob tnotif 0 len tnotif
+end
+if eq sel 1
+js_wsbuf ob dnotif 0 len dnotif
+end
+if eq sel 2
+js_wsbuf ob kchan 0 len kchan
+end
+if eq sel 3
+js_wsbuf ob kmsg 0 len kmsg
+end
+end
+end
+
+note rp_tool: the tools[] entry of tool tc (an object schema with two required strings).
+fn rp_tool ob edit uchar * tc ulong to void
+js_wobj ob
+rp_kv ob ktype vfunc
+js_wsbuf ob vfunc 0 len vfunc
+js_wobj ob
+js_wsbuf ob kname 0 len kname
+rp_tx ob tc 0
+js_wsbuf ob kdesc 0 len kdesc
+rp_tx ob tc 1
+js_wsbuf ob kparams 0 len kparams
+js_wobj ob
+rp_kv ob ktype vobj
+js_wsbuf ob kprops 0 len kprops
+js_wobj ob
+rp_tx ob tc 2
+js_wobj ob
+rp_kv ob ktype vstr
+js_wobje ob
+rp_tx ob tc 3
+js_wobj ob
+rp_kv ob ktype vstr
+js_wobje ob
+js_wobje ob
+js_wsbuf ob kreq 0 len kreq
+js_warr ob
+rp_tx ob tc 2
+rp_tx ob tc 3
+js_warre ob
+js_wsbuf ob kaddp 0 len kaddp
+js_wbool ob false
+js_wobje ob
+js_wobje ob
+js_wobje ob
+end
+
+note rp_body: the chat completion request for request text q; the system prompt carries the
+note effective memory.
+fn rp_body ob edit uchar * gv edit ulong 32 mb edit uchar 65536 q view uchar * to long
+sp = new uchar 4096 0
+w = rc_cat sp 0 tsys1
+w = rc_cat sp w tsys2
+w = rp_mtext mb get gv 6 sp w
+r = js_winit ob
+js_wobj ob
+rp_kv ob kmodel vmodel
+js_wsbuf ob kmaxt 0 len kmaxt
+js_wulong ob get gv 5
+js_wsbuf ob ktemp 0 len ktemp
+js_wnumb ob vzero 0 len vzero
+js_wsbuf ob kmsgs 0 len kmsgs
+js_warr ob
+js_wobj ob
+rp_kv ob krole vsys
+rp_kv ob kcont view part sp 0 w
+js_wobje ob
+js_wobj ob
+rp_kv ob krole vuser
+rp_kv ob kcont q
+js_wobje ob
+js_warre ob
+js_wsbuf ob ktools 0 len ktools
+js_warr ob
+rp_tool ob 1
+rp_tool ob 2
+js_warre ob
+rp_kv ob ktchoi vauto
+js_wobje ob
+ret js_wdone ob
+end
+
+note rp_post: POST ob's JSON text to 127.0.0.1:port; the HTTP status with the body in d and its
+note length in gv 10, or a negative result.
+fn rp_post gv edit ulong 32 ob edit uchar * wl ulong d edit uchar 262144 to long
+a = new uchar 16 0
+r = haddr4 a 2130706433 get gv 2
+fd = hdial a 10000000000
+if lt fd 0
+ret fd
+end
+cs = new ulong 320 0
+io = new uchar 131072 0
+r = hinit cs io int fd 0
+if lt r 0
+x = hclose cs
+ret r
+end
+hsettmo cs 900000000000 900000000000
+hsetbdl cs 900000000000
+put cs HKEEP 0
+r = hreqst cs io tpost
+r = hfe r hreqtg cs io tchat
+r = hfe r hhname cs io thost
+r = hfe r hhval cs io tloc
+r = hfe r hhname cs io tctype
+r = hfe r hhval cs io tjson
+r = hfe r hhend cs io 0 wl
+r = hfe r hput cs io view part ob 1040 wl
+r = hfe r hwfin cs io
+if lt r 0
+x = hclose cs
+ret r
+end
+st = hrsprd cs io
+if lt st 0
+x = hclose cs
+ret st
+end
+n = hbodyall cs io d
+x = hclose cs
+if lt n 0
+ret n
+end
+put gv 14 ulong n
+ret st
+end
+
+note rp_infer: one inference for request text q; writes the R line into lb and returns its length,
+note or a negative result (-1000 - status for a non-200 answer, -2000 - code for a bad JSON answer).
+fn rp_infer gv edit ulong 32 mb edit uchar 65536 q view uchar * lb edit uchar 20480 to long
+ob = new uchar 66576 0
+wl = rp_body ob gv mb q
+if lt wl 0
+ret sub -3000 wl
+end
+d = new uchar 262144 0
+st = rp_post gv ob ulong wl d
+if lt st 0
+ret st
+end
+if ne st 200
+ret sub -1000 st
+end
+ret rp_parse gv view part d 0 get gv 14 lb
+end
+
+note rp_parse: choices[0].message.tool_calls[0].function {name, arguments} and content into the
+note R line in lb (absent fields are "-"). xb regions: name [0, 64), arguments [64, 4160),
+note content [4160, 5184).
+fn rp_parse gv edit ulong 32 d view uchar * lb edit uchar 20480 to long
+tp = new uint 65552 0
+r = js_init tp 262144 64
+k = js_parse d tp len d
+if lt k 0
+ret sub -2000 k
+end
+msg = rp_msg d tp
+if eq msg jsnone
+ret -2100
+end
+xb = new uchar 5184 0
+z = rp_pcall d tp msg xb
+cn = rp_pcont d tp msg xb
+ret rp_rline gv lb xb or z shl cn 32
+end
+
+fn rp_msg d view uchar * tp view uint 65552 to ulong
+ch = rp_mem d tp 0 kchoi
+if eq ch jsnone
+ret jsnone
+end
+if ne js_type tp ch jsarr
+ret jsnone
+end
+ret rp_mem d tp js_first tp ch kmsg
+end
+
+note rp_pcall: the first tool call's name and arguments into xb; name length | arguments << 16.
+fn rp_pcall d view uchar * tp view uint 65552 msg ulong xb edit uchar * to ulong
+tc = rp_mem d tp msg ktcalls
+if eq tc jsnone
+ret 0
+end
+if ne js_type tp tc jsarr
+ret 0
+end
+fu = rp_mem d tp js_first tp tc vfunc
+nt = rp_mem d tp fu kname
+nn = long 0
+if ne nt jsnone
+if eq js_type tp nt jsstr
+nn = js_sget d js_off tp nt part xb 0 64
+end
+end
+an = rp_argv d tp rp_mem d tp fu kargs part xb 64 4096
+if lt nn 0
+nn = long 0
+end
+if lt an 0
+an = long 0
+end
+ret or ulong nn shl ulong an 16
+end
+
+note rp_pcont: message content (a string) into xb[4160, 5184); its length, 0 when absent or longer.
+fn rp_pcont d view uchar * tp view uint 65552 msg ulong xb edit uchar * to ulong
+ct = rp_mem d tp msg kcont
+if eq ct jsnone
+ret 0
+end
+if ne js_type tp ct jsstr
+ret 0
+end
+cn = js_sget d js_off tp ct part xb 4160 1024
+if lt cn 0
+ret 0
+end
+ret ulong cn
+end
+
+note rp_rline: `R id attempt memgen hex(name) hex(arguments) hex(content)` into lb; its length.
+fn rp_rline gv edit ulong 32 lb edit uchar 20480 xb view uchar * z ulong to long
+p = rc_byte lb 0 82
+for i ulong 3
+p = rc_byte lb p 32
+p = rc_dec lb p get gv add 8 i
+end
+p = rc_byte lb p 32
+p = rc_hex lb p view part xb 0 and z 65535
+p = rc_byte lb p 32
+p = rc_hex lb p view part xb 64 and shr z 16 65535
+p = rc_byte lb p 32
+p = rc_hex lb p view part xb 4160 and shr z 32 65535
+p = rc_byte lb p 10
+ret long p
+end
+
+note rp_argv: arguments as sent: a string's decoded bytes, an object's JSON text; -1 otherwise.
+fn rp_argv d view uchar * tp view uint 65552 av ulong ab edit uchar * to long
+if eq av jsnone
+ret -1
+end
+ty = js_type tp av
+if eq ty jsstr
+ret js_sget d js_off tp av ab
+end
+if eq ty jsobj
+o = js_off tp av
+n = js_span tp av
+if gt n len ab
+ret -1
+end
+for i ulong n
+put ab i get d add o i
+end
+ret long n
+end
+ret -1
+end
+
+note ======== typed tools ========
+
+fn rp_tcode nm view uchar * to ulong
+if rc_same nm twart
+ret 1
+end
+if rc_same nm tnotif
+ret 2
+end
+ret 0
+end
+
+fn rp_namec c uchar i ulong to bool
+if and eq i 0 eq c 46
+ret false
+end
+ret or or or and ge c 97 le c 122 and ge c 48 le c 57 eq c 46 or eq c 95 eq c 45
+end
+
+note rp_okb: field bytes: 1..cap bytes, no NUL or control byte except newline and tab when txt.
+fn rp_okb s view uchar * cap ulong txt bool to bool
+if or eq len s 0 gt len s cap
+ret false
+end
+for i ulong len s
+c = get s i
+if lt c 32
+if not and txt or eq c 10 eq c 9
+ret false
+end
+end
+if eq c 127
+ret false
+end
+end
+ret true
+end
+
+note rp_schema: the arguments ab of tool tc against its schema. Returns code | len A << 8 |
+note len B << 24 with A (name or channel) in nb and B (text or message) in xb. Codes: 0 ok,
+note 1 unknown tool, 2 arguments not JSON, 3 not an object, 4 wrong, unknown or repeated member,
+note 5 member not a string, 6 bad name, 7 bad text, 8 bad channel, 9 bad message.
+fn rp_schema tc ulong ab view uchar * nb edit uchar 128 xb edit uchar 4096 to ulong
+if or eq tc 0 gt tc 2
+ret 1
+end
+tp = new uint 65552 0
+r = js_init tp 8192 8
+k = js_parse ab tp len ab
+if lt k 0
+ret 2
+end
+if ne js_type tp 0 jsobj
+ret 3
+end
+if ne js_nkids tp 0 2
+ret 4
+end
+seen = ulong 0
+la = long 0
+lx = long 0
+m = js_first tp 0
+for i ulong 2
+v = add m 1
+if ne js_type tp v jsstr
+ret 5
+end
+if rp_iskey ab js_off tp m tc 0
+if ne and seen 1 0
+ret 4
+end
+seen = or seen 1
+la = js_sget ab js_off tp v nb
+else
+if rp_iskey ab js_off tp m tc 1
+if ne and seen 2 0
+ret 4
+end
+seen = or seen 2
+lx = js_sget ab js_off tp v xb
+else
+ret 4
+end
+end
+m = js_mnext tp m
+end
+ret rp_sfin tc nb la xb lx
+end
+
+note rp_iskey: the key at src[off] is member w (0 first, 1 second) of tool tc's schema.
+fn rp_iskey src view uchar * off ulong tc ulong w ulong to bool
+if eq tc 1
+if eq w 0
+ret js_streq src off kname
+end
+ret js_streq src off ktext
+end
+if eq w 0
+ret js_streq src off kchan
+end
+ret js_streq src off kmsg
+end
+
+fn rp_sfin tc ulong nb edit uchar 128 la long xb edit uchar 4096 lx long to ulong
+if lt la 1
+ret add 6 mul sub tc 1 2
+end
+if lt lx 1
+ret add 7 mul sub tc 1 2
+end
+ret rp_sval tc view part nb 0 ulong la view part xb 0 ulong lx
+end
+
+fn rp_sval tc ulong a view uchar * b view uchar * to ulong
+if eq tc 1
+if not rp_okb a 64 false
+ret 6
+end
+for i ulong len a
+if not rp_namec get a i i
+ret 6
+end
+end
+if not rp_okb b 4096 true
+ret 7
+end
+else
+if not rc_same a vops
+ret 8
+end
+if not rp_okb b 256 false
+ret 9
+end
+end
+ret or shl len a 8 shl len b 24
+end
+
+note ======== effects ========
+
+fn rp_fnv s view uchar * to ulong
+h = ulong 14695981039346656037
+for i ulong len s
+h = mul xor h ulong get s i 1099511628211
+end
+ret h
+end
+
+note rp_fpath: dir + /out/ + id + - + name into pb; the length.
+fn rp_fpath gd edit uchar 512 gv edit ulong 32 nm view uchar * pb edit uchar 1024 to ulong
+p = rp_path gd gv toutd pb
+p = rc_dec pb p get gv 8
+p = rc_byte pb p 45
+ret rc_cat pb p nm
+end
+
+fn rp_tpath gd edit uchar 512 gv edit ulong 32 pb edit uchar 1024 to ulong
+p = rp_path gd gv ttmp pb
+ret rc_dec pb p get gv 8
+end
+
+note rp_pk2: the packed list (a, b) for renames into k; its length.
+fn rp_pk2 a view uchar * b view uchar * k edit uchar 2100 to ulong
+put k 0 2
+put k 1 0
+put k 2 uchar and len a 255
+put k 3 uchar shr len a 8
+p = rc_cat k 4 a
+put k p uchar and len b 255
+put k add p 1 uchar shr len b 8
+ret rc_cat k add p 2 b
+end
+
+note rp_write: the artifact text x as out/<id>-<name>: present (recovered, gv 11 = 1) or written
+note through a temporary file and a rename that never replaces. gv 12 = length, gv 13 = fnv64.
+note 0 or a negative result.
+fn rp_write gd edit uchar 512 gv edit ulong 32 nm view uchar * x view uchar * to long
+fp = new uchar 1024 0
+fl = rp_fpath gd gv nm fp
+st = new uchar 128 0
+put gv 11 0
+s = stat fp 0 fl st 0 128
+if eq s 0
+ret rp_wold gd gv view part fp 0 fl
+end
+ret rp_wnew gd gv view part fp 0 fl x
+end
+
+note rp_wold: the artifact at fp already exists: read it back, hash it, drop a stale temp file.
+fn rp_wold gd edit uchar 512 gv edit ulong 32 fp view uchar * to long
+rb = new uchar 4097 0
+r = rc_read fp rb
+if lt r 0
+ret r
+end
+put gv 11 1
+put gv 12 ulong r
+put gv 13 rp_fnv view part rb 0 ulong r
+tp = new uchar 1024 0
+tl = rp_tpath gd gv tp
+u = unlink tp 0 tl
+ret 0
+end
+
+note rp_wtmp: x written to a new or truncated file at p and fsync'd; 0 or a negative result.
+fn rp_wtmp p view uchar * x view uchar * to long
+fd = fopen p 0 len p 524865 384
+if lt fd 0
+ret fd
+end
+r = rc_wall int fd x len x
+s = fsync int fd
+c = fclose int fd
+if or lt r 0 lt s 0
+ret -5
+end
+ret 0
+end
+
+fn rp_wnew gd edit uchar 512 gv edit ulong 32 fp view uchar * x view uchar * to long
+tp = new uchar 1024 0
+tl = rp_tpath gd gv tp
+r = rp_wtmp view part tp 0 tl x
+if lt r 0
+ret r
+end
+rn = rp_mv view part tp 0 tl fp
+if lt rn 0
+ret rn
+end
+ret rp_wfin gd gv x
+end
+
+note rp_mv: rename a to b, refusing to replace an existing b.
+fn rp_mv a view uchar * b view uchar * to long
+k = new uchar 2100 0
+kn = rp_pk2 a b k
+ret renames k 0 kn 1
+end
+
+fn rp_wfin gd edit uchar 512 gv edit ulong 32 x view uchar * to long
+od = new uchar 1024 0
+on = rp_path gd gv tout od
+s = rc_fsdir view part od 0 on
+put gv 12 len x
+put gv 13 rp_fnv x
+ret 0
+end
+
+note rp_notify: one sink line `id channel hex(message)`; gv 12 = message length, gv 13 = fnv64.
+fn rp_notify gd edit uchar 512 gv edit ulong 32 ch view uchar * x view uchar * to long
+lb = new uchar 1024 0
+p = rc_dec lb 0 get gv 8
+p = rc_byte lb p 32
+p = rc_cat lb p ch
+p = rc_byte lb p 32
+p = rc_hex lb p x
+p = rc_byte lb p 10
+r = rp_sink gd gv view part lb 0 p
+put gv 12 len x
+put gv 13 rp_fnv x
+ret r
+end
+
+fn rp_sink gd edit uchar 512 gv edit ulong 32 lb view uchar * to long
+sp = new uchar 1024 0
+n = rp_path gd gv tsnkf sp
+ret rc_append view part sp 0 n lb len lb
+end
+
+note ======== one request ========
+
+fn rp_t gd edit uchar 512 gv edit ulong 32 st ulong to long
+put gv 20 get gv 8
+put gv 21 st
+ret rp_rk gd gv 84 2
+end
+
+note rp_eff: perform (or recover) tool tc's effect from the R line's arguments; record D and T.
+fn rp_eff gd edit uchar 512 gv edit ulong 32 jb edit uchar 1048576 sv edit ulong 40 tc ulong to long
+ab = new uchar 4096 0
+an = rp_field jb get sv 7 get sv 15 5 ab
+if lt an 0
+ret -4
+end
+nb = new uchar 128 0
+xb = new uchar 4096 0
+z = rp_schema tc view part ab 0 ulong an nb xb
+if ne and z 255 0
+ret -4
+end
+ret rp_do gd gv tc nb xb z
+end
+
+note rp_do: the effect itself, then (unless crash=W) D and T DONE.
+fn rp_do gd edit uchar 512 gv edit ulong 32 tc ulong nb edit uchar 128 xb edit uchar 4096 z ulong to long
+la = and shr z 8 65535
+lx = and shr z 24 65535
+r = long 0
+if eq tc 1
+r = rp_write gd gv view part nb 0 la view part xb 0 lx
+else
+r = rp_notify gd gv view part nb 0 la view part xb 0 lx
+end
+if lt r 0
+ret r
+end
+rp_crash gv 87
+put gv 20 get gv 8
+put gv 21 tc
+put gv 22 get gv 12
+put gv 23 get gv 13
+put gv 24 get gv 11
+r = rp_rk gd gv 68 5
+if lt r 0
+ret r
+end
+ret rp_t gd gv 1
+end
+
+note rp_step: one move of request gv 8 (sv freshly scanned). 0 terminal, 1 progressed (scan
+note again), 77 never returns (crash), negative error.
+fn rp_step gd edit uchar 512 gv edit ulong 32 jb edit uchar 1048576 mb edit uchar 65536 sv edit ulong 40 lb edit uchar 20480 to long
+if ne get sv 13 0
+ret 0
+end
+if eq get sv 0 0
+ret -4
+end
+if and eq get sv 2 1 eq get sv 9 0
+ret rp_t gd gv 2
+end
+put gv 11 0
+if gt get sv 9 0
+if gt get sv 11 0
+ret rp_t gd gv 1
+end
+if eq get sv 10 2
+put gv 20 get gv 8
+put gv 21 2
+r = rp_rk gd gv 85 2
+if lt r 0
+ret r
+end
+ret rp_t gd gv 4
+end
+ret rp_eff gd gv jb sv 1
+end
+if eq get sv 8 2
+ret rp_t gd gv 3
+end
+if or or eq get sv 5 0 ne get sv 6 get gv 4 lt get sv 5 get sv 3
+ret rp_ask gd gv jb mb sv lb
+end
+ret rp_act gd gv jb sv
+end
+
+note rp_act: a current inference result exists: NOTOOL, or schema check (A), effect intent (E),
+note effect (rp_eff).
+fn rp_act gd edit uchar 512 gv edit ulong 32 jb edit uchar 1048576 sv edit ulong 40 to long
+nm = new uchar 64 0
+nn = rp_field jb get sv 7 get sv 15 4 nm
+if lt nn 0
+ret -4
+end
+if eq nn 0
+ret rp_t gd gv 5
+end
+tc = rp_tcode view part nm 0 ulong nn
+code = rp_check jb sv tc
+put gv 20 get gv 8
+if ne code 0
+put gv 21 0
+put gv 22 code
+r = rp_rk gd gv 65 3
+if lt r 0
+ret r
+end
+ret rp_t gd gv 3
+end
+put gv 21 1
+r = rp_rk gd gv 65 2
+if lt r 0
+ret r
+end
+put gv 21 tc
+r = rp_rk gd gv 69 2
+if lt r 0
+ret r
+end
+rp_crash gv 69
+ret rp_eff gd gv jb sv tc
+end
+
+note rp_check: the schema code of the R line's arguments for tool tc (2 when they do not decode).
+fn rp_check jb edit uchar 1048576 sv edit ulong 40 tc ulong to ulong
+ab = new uchar 4096 0
+an = rp_field jb get sv 7 get sv 15 5 ab
+if lt an 0
+ret 2
+end
+nb = new uchar 128 0
+xb = new uchar 4096 0
+ret and rp_schema tc view part ab 0 ulong an nb xb 255
+end
+
+
+note rp_ask: a new inference attempt (I, then R or N) against the current memory generation.
+fn rp_ask gd edit uchar 512 gv edit ulong 32 jb edit uchar 1048576 mb edit uchar 65536 sv edit ulong 40 lb edit uchar 20480 to long
+if ge get sv 14 3
+ret rp_t gd gv 6
+end
+na = add get sv 3 1
+put gv 9 na
+put gv 10 get gv 4
+put gv 20 get gv 8
+put gv 21 na
+put gv 22 get gv 4
+r = rp_rk gd gv 73 3
+if lt r 0
+ret r
+end
+rp_crash gv 73
+q = new uchar 8192 0
+qn = rp_field jb get sv 1 get sv 16 2 q
+if lt qn 0
+ret -4
+end
+r = rp_infer gv mb view part q 0 ulong qn lb
+if lt r 0
+put gv 21 na
+put gv 22 ulong neg r
+x = rp_rk gd gv 78 3
+ret 1
+end
+r = rp_rec gd gv view part lb 0 ulong r
+if lt r 0
+ret r
+end
+rp_crash gv 82
+ret 1
+end
+
+note ======== commands ========
+
+fn rp_dir gd edit uchar 512 gv edit ulong 32 to bool
+n = rc_arg 2 gd
+if or le n 0 ge n 400
+ret false
+end
+put gv 1 ulong n
+ret true
+end
+
+fn rp_init gd edit uchar 512 gv edit ulong 32 to int
+m = makedir gd 0 get gv 1 448
+if and lt m 0 ne m -17
+ret 3
+end
+pb = new uchar 1024 0
+n = rp_path gd gv tout pb
+m = makedir pb 0 n 448
+if and lt m 0 ne m -17
+ret 3
+end
+n = rp_path gd gv tsink pb
+m = makedir pb 0 n 448
+if and lt m 0 ne m -17
+ret 3
+end
+ret 0
+end
+
+note rp_ids: the ids of the Q lines in order into ids (at most 64); their count.
+fn rp_ids jb edit uchar 1048576 n ulong ids edit ulong 64 to ulong
+c = ulong 0
+p = ulong 0
+while lt p n bound 1048577
+e = rp_eol jb p n
+if and eq get jb p 81 lt c 64
+put ids c rp_fnum jb p e 1
+c = add c 1
+end
+p = add e 1
+end
+ret c
+end
+
+fn rp_argid i ulong to ulong
+b = new uchar 32 0
+n = rc_arg i b
+if le n 0
+ret 0
+end
+v = rc_num b 0 ulong n
+if or eq v 0 gt v 999999
+ret 0
+end
+ret v
+end
+
+fn rp_submit gd edit uchar 512 gv edit ulong 32 jb edit uchar 1048576 to int
+id = rp_argid 3
+if eq id 0
+ret 4
+end
+q = new uchar 4096 0
+qn = rc_arg 4 q
+if or le qn 0 ge qn 4096
+ret 4
+end
+r = rp_jload gd gv jb
+if lt r 0
+ret 3
+end
+sv = new ulong 40 0
+rp_scan jb get gv 0 id sv
+if eq get sv 0 1
+ret 4
+end
+lb = new uchar 8300 0
+p = rc_byte lb 0 81
+p = rc_byte lb p 32
+p = rc_dec lb p id
+p = rc_byte lb p 32
+p = rc_hex lb p view part q 0 ulong qn
+p = rc_byte lb p 10
+r = rp_rec gd gv view part lb 0 p
+if lt r 0
+ret 3
+end
+ret 0
+end
+
+fn rp_cancel gd edit uchar 512 gv edit ulong 32 jb edit uchar 1048576 to int
+id = rp_argid 3
+if eq id 0
+ret 4
+end
+r = rp_jload gd gv jb
+if lt r 0
+ret 3
+end
+sv = new ulong 40 0
+rp_scan jb get gv 0 id sv
+if eq get sv 0 0
+ret 4
+end
+put gv 20 id
+r = rp_rk gd gv 88 1
+if lt r 0
+ret 3
+end
+ret 0
+end
+
+fn rp_remember gd edit uchar 512 gv edit ulong 32 to int
+k = new uchar 64 0
+v = new uchar 64 0
+kn = rc_arg 3 k
+vn = rc_arg 4 v
+if or le kn 0 le vn 0
+ret 4
+end
+if or not rp_word view part k 0 ulong kn not rp_word view part v 0 ulong vn
+ret 4
+end
+lb = new uchar 128 0
+p = rc_byte lb 0 77
+p = rc_byte lb p 32
+p = rc_cat lb p view part k 0 ulong kn
+p = rc_byte lb p 32
+p = rc_cat lb p view part v 0 ulong vn
+p = rc_byte lb p 10
+r = rp_mapp gd gv view part lb 0 p
+if lt r 0
+ret 3
+end
+ret 0
+end
+
+fn rp_mapp gd edit uchar 512 gv edit ulong 32 lb view uchar * to long
+pb = new uchar 1024 0
+n = rp_path gd gv tmemf pb
+ret rc_append view part pb 0 n lb len lb
+end
+
+note rp_opt: optional run arguments 4 and 5 (crash=C, maxtok=N).
+fn rp_opt gv edit ulong 32 i ulong to bool
+b = new uchar 64 0
+n = rc_arg i b
+if le n 0
+ret true
+end
+m = ulong n
+if and gt m len tcrash rc_is b 0 len tcrash tcrash
+put gv 3 ulong get b len tcrash
+ret true
+end
+if and gt m len tmaxt rc_is b 0 len tmaxt tmaxt
+v = rc_num b len tmaxt sub m len tmaxt
+if or eq v 0 gt v 4096
+ret false
+end
+put gv 5 v
+ret true
+end
+ret false
+end
+
+fn rp_run gd edit uchar 512 gv edit ulong 32 jb edit uchar 1048576 mb edit uchar 65536 to int
+put gv 2 rp_argid 3
+put gv 5 64
+if or eq get gv 2 0 gt get gv 2 65535
+ret 2
+end
+if or not rp_opt gv 4 not rp_opt gv 5
+ret 2
+end
+r = rp_jload gd gv jb
+if lt r 0
+ret 3
+end
+ids = new ulong 64 0
+c = rp_ids jb get gv 0 ids
+sv = new ulong 40 0
+lb = new uchar 20480 0
+nop = ulong 0
+for i ulong c
+put gv 8 get ids i
+for t ulong 16
+r = rp_jload gd gv jb
+if lt r 0
+ret 3
+end
+r = rp_mload gd gv mb
+if lt r 0
+ret 3
+end
+rp_scan jb get gv 0 get gv 8 sv
+r = rp_step gd gv jb mb sv lb
+if le r 0
+break
+end
+end
+r = rp_jload gd gv jb
+rp_scan jb get gv 0 get gv 8 sv
+if eq get sv 13 0
+nop = add nop 1
+end
+rp_say trp get gv 8 get sv 13
+end
+if gt nop 0
+ret 5
+end
+ret 0
+end
+
+fn rp_say t view uchar * id ulong s ulong to void
+b = new uchar 64 0
+p = rc_cat b 0 t
+p = rc_dec b p id
+p = rc_byte b p 32
+p = rc_dec b p s
+p = rc_byte b p 10
+rc_out view part b 0 p
+end
+
+fn rp_status gd edit uchar 512 gv edit ulong 32 jb edit uchar 1048576 to int
+r = rp_jload gd gv jb
+if lt r 0
+ret 3
+end
+ids = new ulong 64 0
+c = rp_ids jb get gv 0 ids
+sv = new ulong 40 0
+b = new uchar 160 0
+for i ulong c
+rp_scan jb get gv 0 get ids i sv
+p = rc_cat b 0 tsl
+p = rc_dec b p get ids i
+p = rc_byte b p 32
+p = rc_dec b p get sv 13
+p = rc_byte b p 32
+p = rc_dec b p get sv 9
+p = rc_byte b p 32
+p = rc_dec b p get sv 11
+p = rc_byte b p 32
+p = rc_dec b p get sv 12
+p = rc_byte b p 32
+p = rc_dec b p get sv 3
+p = rc_byte b p 10
+rc_out view part b 0 p
+end
+ret 0
+end
+
+fn main to int
+gd = new uchar 512 0
+gv = new ulong 32 0
+jb = new uchar 1048576 0
+mb = new uchar 65536 0
+cm = new uchar 16 0
+cn = rc_arg 1 cm
+if or le cn 0 not rp_dir gd gv
+rc_out tbadarg
+ret 2
+end
+
+if rc_is cm 0 ulong cn tinit
+ret rp_init gd gv
+end
+if rc_is cm 0 ulong cn tsubm
+ret rp_submit gd gv jb
+end
+if rc_is cm 0 ulong cn tcanc
+ret rp_cancel gd gv jb
+end
+if rc_is cm 0 ulong cn tremb
+ret rp_remember gd gv
+end
+if rc_is cm 0 ulong cn trun
+ret rp_run gd gv jb mb
+end
+if rc_is cm 0 ulong cn tstat
+ret rp_status gd gv jb
+end
+rc_out tbadarg
+ret 2
+end

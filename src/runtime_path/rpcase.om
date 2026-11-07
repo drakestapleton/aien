@@ -1,0 +1,1210 @@
+note SPDX-License-Identifier: AGPL-3.0-or-later
+note rpcase.om: the DRA-172 scenario conductor. It runs the runtime (rpath), the fixture (rpfix)
+note and the independent verifier (rpver) as separate processes with fork/execprog, kills and
+note restarts the runtime, and prints one `CASE id name PASS|FAIL [step N]` line per case, then
+note `RPCASE <LABEL> PASS cases=N` (exit 0) or `RPCASE <LABEL> FAIL failed=F cases=N` (exit 1).
+note   rpcase synthetic BINDIR WORK        label SYNTHETIC: starts BINDIR/rpfix (a protocol fixture,
+note                                       not a model) and runs cases c1 .. c13
+note   rpcase real BINDIR WORK PORT        label REAL: the model server already listening on
+note                                       127.0.0.1:PORT; runs cases r1 .. r4, which assert the
+note                                       runtime's recovery invariants and record (not assert)
+note                                       what the model chose
+note BINDIR holds rpath, rpfix and rpver; WORK must not exist (exit 2 otherwise). Every case has
+note its own state directory WORK/<id>; stdout of every child goes to a file beside it.
+note Exit 2 usage, 3 setup (fixture did not start, WORK unusable).
+
+global pk uchar 4096
+global pkn ulong 2
+
+text trpath "/rpath"
+text trpfix "/rpfix"
+text trpver "/rpver"
+text tinit "init"
+text tsubm "submit"
+text tcanc "cancel"
+text tremb "remember"
+text trun "run"
+text tstat "status"
+text tunit "unit"
+text tcel "celsius"
+text tfah "fahrenheit"
+text tcrI "crash=I"
+text tcrR "crash=R"
+text tcrE "crash=E"
+text tcrW "crash=W"
+text tmax "200"
+text qwrite "Write the temperature report as report.txt. case=write"
+text qslow "Write the temperature report as report.txt. case=slow"
+text qbad "Write the temperature report as report.txt. case=badargs"
+text qnot "Tell the ops channel that the deploy finished. case=notify"
+text qplain "Say hello."
+text artcel "unit=celsius value=21"
+text artfah "unit=fahrenheit value=21"
+text ttdir "/"
+text toutr "/out/1-report.txt"
+text tout2 "/out/2-report.txt"
+text tout99 "/out/99-stray.txt"
+text tjrn "/journal.log"
+text tsink "/sink/notify.log"
+text tfxlog "/fixture.log"
+text sfx ".out"
+text sver ".ver"
+text sst ".st"
+text tport "PORT "
+text tnl "\n"
+text ni11 "\nI 1 1 "
+text nr12 "\nR 1 2 2 "
+text fxfah "write fahrenheit"
+text fxcel "write celsius"
+text tone "1"
+text ttwo "2"
+text tcase "CASE "
+text tpass " PASS\n"
+text tfail " FAIL step "
+text tsynl "SYNTHETIC"
+text treal "REAL"
+text tsyn "synthetic"
+text trl "real"
+text tsum1 "RPCASE "
+text tsum2 " PASS cases="
+text tsum3 " FAIL failed="
+text tsum4 " cases="
+text tobs "OBSERVED "
+text tusage "rpcase: usage: rpcase synthetic BINDIR WORK | rpcase real BINDIR WORK PORT\n"
+text tnc "-"
+text n1 "c1 happy-path"
+text n2 "c2 crash-after-intent-restart"
+text n3 "c3 crash-after-effect-restart"
+text n4 "c4 sigkill-during-inference-restart"
+text n5 "c5 cancel-during-inference"
+text n6 "c6 cancel-kill-restart"
+text n7 "c7 stale-memory-correction-restart"
+text n8 "c8 invalid-tool-arguments"
+text n9 "c9 uncertain-outcome-unknown"
+text n10 "c10 notify-happy-path"
+text n11 "c11 no-tool-call"
+text n12 "c12 verifier-negative-artifact-tamper"
+text n13 "c13 verifier-negative-stray-file"
+text n14 "c14 torn-journal-tail-restart"
+text ttorn "D 1 1 2"
+text nd1 "\nD 1 "
+text m1 "r1 real-request"
+text m2 "r2 real-sigkill-during-inference-restart"
+text m3 "r3 real-stale-memory-correction-restart"
+text m4 "r4 real-cancel-during-inference"
+text crec ".record"
+text tsp " "
+
+note ======== packets and processes ========
+
+fn pk_reset to void
+put pkn 0 2
+put pkn 1 0
+put pk 0 0
+put pk 1 0
+end
+
+note pk_add2: one argument a + b.
+fn pk_add2 a view uchar * b view uchar * to void
+n = get pkn 0
+m = add len a len b
+if gt add add n 2 m 4096
+trap 3
+end
+put pk n uchar and m 255
+put pk add n 1 uchar shr m 8
+for i ulong len a
+put pk add add n 2 i get a i
+end
+for i ulong len b
+put pk add add add n 2 len a i get b i
+end
+put pkn 0 add add n 2 m
+c = add get pkn 1 1
+put pkn 1 c
+put pk 0 uchar and c 255
+put pk 1 uchar shr c 8
+end
+
+fn pk_add a view uchar * to void
+n = get pkn 0
+m = len a
+if gt add add n 2 m 4096
+trap 3
+end
+put pk n uchar and m 255
+put pk add n 1 uchar shr m 8
+for i ulong m
+put pk add add n 2 i get a i
+end
+put pkn 0 add add n 2 m
+c = add get pkn 1 1
+put pkn 1 c
+put pk 0 uchar and c 255
+put pk 1 uchar shr c 8
+end
+
+note cx_spawn: fork and execprog the packet; the child's stdout and stderr go to out (created,
+note truncated) when out is not empty. The child pid or a negative result.
+fn cx_spawn ofp view uchar * to long
+pid = fork
+if lt pid 0
+ret pid
+end
+if eq pid 0
+if gt len ofp 0
+fd = fopen ofp 0 len ofp 524865 384
+if ge fd 0
+d = dupfd int fd 1 0
+d = dupfd int fd 2 0
+end
+end
+r = execprog pk 0 get pkn 0
+exit 127
+end
+ret pid
+end
+
+note cx_wait: exit status of pid, or 1000 + signal when it was killed.
+fn cx_wait pid long to long
+st = new uchar 4 0
+r = waitpid int pid st 0 4 0
+if lt r 0
+ret r
+end
+s = or or ulong get st 0 shl ulong get st 1 8 shl ulong get st 2 16
+if eq and s 127 0
+ret long and shr s 8 255
+end
+ret long add 1000 and s 127
+end
+
+fn cx_do ofp view uchar * to long
+pid = cx_spawn ofp
+if lt pid 0
+ret pid
+end
+ret cx_wait pid
+end
+
+note ======== context ========
+note cb: BINDIR at [0, cv 0), WORK at [1024, 1024 + cv 1), port text at [2048, 2048 + cv 2).
+note cv 3 cases, 4 failures, 5 fixture pid, 6 mode (1 synthetic, 2 real).
+
+fn pk_bin cb edit uchar 4096 cv edit ulong 16 nm view uchar * to void
+pk_reset
+pk_add2 view part cb 0 get cv 0 nm
+end
+
+note cx_dir: WORK/<name> into d; its length.
+fn cx_dir cb edit uchar 4096 cv edit ulong 16 nm view uchar * d edit uchar 1024 to ulong
+p = rc_cat d 0 view part cb 1024 get cv 1
+p = rc_cat d p ttdir
+ret rc_cat d p nm
+end
+
+note cx_rp: rpath VERB DIR [A3 [A4]] with stdout to DIR.out (append not needed: one file per call
+note kind). Arguments after the directory are taken from the packet tail the caller adds.
+fn cx_rp0 cb edit uchar 4096 cv edit ulong 16 vb view uchar * to void
+pk_bin cb cv trpath
+pk_add vb
+pk_add view part cb 3072 get cv 7
+end
+
+fn cx_out dir view uchar * s view uchar * o edit uchar 1024 to ulong
+p = rc_cat o 0 dir
+ret rc_cat o p s
+end
+
+note cx_go: run the packet with stdout to dir + s; its status.
+fn cx_go dir view uchar * s view uchar * to long
+o = new uchar 1024 0
+n = cx_out dir s o
+ret cx_do view part o 0 n
+end
+
+fn cx_init cb edit uchar 4096 cv edit ulong 16 to bool
+cx_rp0 cb cv tinit
+ret eq cx_go view part cb 3072 get cv 7 sfx 0
+end
+
+fn cx_rem cb edit uchar 4096 cv edit ulong 16 v view uchar * to bool
+cx_rp0 cb cv tremb
+pk_add tunit
+pk_add v
+ret eq cx_go view part cb 3072 get cv 7 sfx 0
+end
+
+fn cx_sub cb edit uchar 4096 cv edit ulong 16 id view uchar * q view uchar * to bool
+cx_rp0 cb cv tsubm
+pk_add id
+pk_add q
+ret eq cx_go view part cb 3072 get cv 7 sfx 0
+end
+
+fn cx_can cb edit uchar 4096 cv edit ulong 16 id view uchar * to bool
+cx_rp0 cb cv tcanc
+pk_add id
+ret eq cx_go view part cb 3072 get cv 7 sfx 0
+end
+
+note cx_run: rpath run DIR PORT [crash]; its status (77 after an injected crash).
+fn cx_run cb edit uchar 4096 cv edit ulong 16 cr view uchar * to long
+cx_rp0 cb cv trun
+pk_add view part cb 2048 get cv 2
+if not rc_same cr tnc
+pk_add cr
+end
+ret cx_go view part cb 3072 get cv 7 sfx
+end
+
+note cx_runbg: rpath run DIR PORT in the background; its pid.
+fn cx_runbg cb edit uchar 4096 cv edit ulong 16 to long
+cx_rp0 cb cv trun
+pk_add view part cb 2048 get cv 2
+o = new uchar 1024 0
+n = cx_out view part cb 3072 get cv 7 sfx o
+ret cx_spawn view part o 0 n
+end
+
+fn cx_ver cb edit uchar 4096 cv edit ulong 16 to long
+pk_bin cb cv trpver
+pk_add view part cb 3072 get cv 7
+ret cx_go view part cb 3072 get cv 7 sver
+end
+
+note cx_st: `rpath status DIR`, the line for request id into sv: 0 state, 1 E, 2 D, 3 U, 4 attempts;
+note false when absent.
+fn cx_st cb edit uchar 4096 cv edit ulong 16 id ulong sv edit ulong 8 to bool
+cx_rp0 cb cv tstat
+r = cx_go view part cb 3072 get cv 7 sst
+if ne r 0
+ret false
+end
+o = new uchar 1024 0
+n = cx_out view part cb 3072 get cv 7 sst o
+b = new uchar 65536 0
+k = rc_read view part o 0 n b
+if le k 0
+ret false
+end
+ret cx_sline view part b 0 ulong k id sv
+end
+
+fn cx_sline b view uchar * id ulong sv edit ulong 8 to bool
+p = ulong 0
+while lt p len b bound 65537
+e = rc_find b p len b tnl
+if eq cx_fn b p e 1 id
+for i ulong 5
+put sv i cx_fn b p e add i 2
+end
+ret true
+end
+p = add e 1
+end
+ret false
+end
+
+note cx_fn: decimal field k of the line [p, e).
+fn cx_fn b view uchar * p ulong e ulong k ulong to ulong
+f = ulong 0
+s = p
+i = p
+while lt i e bound 65537
+if eq get b i 32
+if eq f k
+ret rc_num b s sub i s
+end
+f = add f 1
+s = add i 1
+end
+i = add i 1
+end
+if eq f k
+ret rc_num b s sub e s
+end
+ret 18446744073709551615
+end
+
+note cx_want: sv matches state, E, D, U (attempts unchecked).
+fn cx_want sv edit ulong 8 st ulong e ulong d ulong u ulong to bool
+ret and and and eq get sv 0 st eq get sv 1 e eq get sv 2 d eq get sv 3 u
+end
+
+note ======== files ========
+
+fn cx_fread dir view uchar * s view uchar * b edit uchar 65536 to long
+o = new uchar 1024 0
+n = cx_out dir s o
+ret rc_read view part o 0 n b
+end
+
+fn cx_feq dir view uchar * s view uchar * x view uchar * to bool
+b = new uchar 65536 0
+k = cx_fread dir s b
+if lt k 0
+ret false
+end
+ret rc_same view part b 0 ulong k x
+end
+
+fn cx_absent dir view uchar * s view uchar * to bool
+b = new uchar 65536 0
+ret eq cx_fread dir s b -2
+end
+
+note cx_count: occurrences of nd in the file dir + s (0 when absent).
+fn cx_count dir view uchar * s view uchar * nd view uchar * to ulong
+b = new uchar 65536 0
+k = cx_fread dir s b
+if le k 0
+ret 0
+end
+c = ulong 0
+p = ulong 0
+m = ulong k
+while lt p m bound 65537
+i = rc_find b p m nd
+if ge i m
+break
+end
+c = add c 1
+p = add i 1
+end
+ret c
+end
+
+note cx_poll: wait (50 ms steps, at most 20 s) until the file dir + s contains nd.
+fn cx_poll dir view uchar * s view uchar * nd view uchar * to bool
+for t ulong 400
+if gt cx_count dir s nd 0
+ret true
+end
+z = sleepns 50000000
+end
+ret false
+end
+
+fn cx_flen dir view uchar * s view uchar * to long
+b = new uchar 65536 0
+ret cx_fread dir s b
+end
+
+note cx_snap: inode and mtime (stat bytes 8..16 and 88..104) of dir + s into o; false when absent.
+fn cx_snap dir view uchar * s view uchar * o edit uchar 24 to bool
+p = new uchar 1024 0
+n = cx_out dir s p
+st = new uchar 128 0
+r = stat p 0 n st 0 128
+if ne r 0
+ret false
+end
+for i ulong 8
+put o i get st add 8 i
+end
+for i ulong 16
+put o add 8 i get st add 88 i
+end
+ret true
+end
+
+note ======== reporting ========
+
+fn cx_res cv edit ulong 16 nm view uchar * ok bool step ulong to bool
+put cv 3 add get cv 3 1
+b = new uchar 256 0
+p = rc_cat b 0 tcase
+p = rc_cat b p nm
+if ok
+p = rc_cat b p tpass
+else
+put cv 4 add get cv 4 1
+p = rc_cat b p tfail
+p = rc_dec b p step
+p = rc_byte b p 10
+end
+rc_out view part b 0 p
+ret ok
+end
+
+note cx_obs: `OBSERVED name state E D U attempts` for a REAL case (what the model led to).
+fn cx_obs nm view uchar * sv edit ulong 8 to void
+b = new uchar 256 0
+p = rc_cat b 0 tobs
+p = rc_cat b p nm
+for i ulong 5
+p = rc_byte b p 32
+p = rc_dec b p get sv i
+end
+p = rc_byte b p 10
+rc_out view part b 0 p
+end
+
+note ======== SYNTHETIC cases ========
+note Each case function returns the failing step (0 = pass) for state directory d.
+
+fn c_base cb edit uchar 4096 cv edit ulong 16 mem view uchar * q view uchar * to ulong
+if not cx_init cb cv
+ret 1
+end
+if gt len mem 0
+if not cx_rem cb cv mem
+ret 2
+end
+end
+if not cx_sub cb cv tone q
+ret 3
+end
+ret 0
+end
+
+fn c1 cb edit uchar 4096 cv edit ulong 16 to ulong
+s = c_base cb cv tcel qwrite
+if ne s 0
+ret s
+end
+if ne cx_run cb cv tnc 0
+ret 10
+end
+sv = new ulong 8 0
+if not cx_st cb cv 1 sv
+ret 11
+end
+if not cx_want sv 1 1 1 0
+ret 12
+end
+if not cx_feq view part cb 3072 get cv 7 toutr artcel
+ret 13
+end
+if ne cx_ver cb cv 0
+ret 14
+end
+ret 0
+end
+
+fn c2 cb edit uchar 4096 cv edit ulong 16 to ulong
+s = c_base cb cv tcel qwrite
+if ne s 0
+ret s
+end
+if ne cx_run cb cv tcrE 77
+ret 10
+end
+if not cx_absent view part cb 3072 get cv 7 toutr
+ret 11
+end
+if ne cx_run cb cv tnc 0
+ret 12
+end
+sv = new ulong 8 0
+if not cx_st cb cv 1 sv
+ret 13
+end
+if not cx_want sv 1 1 1 0
+ret 14
+end
+if not cx_feq view part cb 3072 get cv 7 toutr artcel
+ret 15
+end
+if ne cx_ver cb cv 0
+ret 16
+end
+ret 0
+end
+
+fn c3 cb edit uchar 4096 cv edit ulong 16 to ulong
+s = c_base cb cv tcel qwrite
+if ne s 0
+ret s
+end
+if ne cx_run cb cv tcrW 77
+ret 10
+end
+a = new uchar 24 0
+if not cx_snap view part cb 3072 get cv 7 toutr a
+ret 11
+end
+if ne cx_run cb cv tnc 0
+ret 12
+end
+sv = new ulong 8 0
+if not cx_st cb cv 1 sv
+ret 13
+end
+if not cx_want sv 1 1 1 0
+ret 14
+end
+b = new uchar 24 0
+if not cx_snap view part cb 3072 get cv 7 toutr b
+ret 15
+end
+if not rc_same a b
+ret 16
+end
+if ne cx_ver cb cv 0
+ret 17
+end
+ret 0
+end
+
+note c4: SIGKILL while the inference is in flight (the fixture holds slow answers for 3 s).
+fn c4 cb edit uchar 4096 cv edit ulong 16 to ulong
+s = c_base cb cv tcel qslow
+if ne s 0
+ret s
+end
+pid = cx_runbg cb cv
+if lt pid 0
+ret 10
+end
+if not cx_poll view part cb 3072 get cv 7 tjrn ni11
+ret 11
+end
+k = killpid int pid 9
+if ne cx_wait pid 1009
+ret 12
+end
+if ne cx_run cb cv tnc 0
+ret 13
+end
+sv = new ulong 8 0
+if not cx_st cb cv 1 sv
+ret 14
+end
+if not and cx_want sv 1 1 1 0 eq get sv 4 2
+ret 15
+end
+if not cx_feq view part cb 3072 get cv 7 toutr artcel
+ret 16
+end
+if ne cx_ver cb cv 0
+ret 17
+end
+ret 0
+end
+
+note c5: cancel arrives while the inference is in flight; the answer comes back, no effect follows.
+fn c5 cb edit uchar 4096 cv edit ulong 16 to ulong
+s = c_base cb cv tcel qslow
+if ne s 0
+ret s
+end
+pid = cx_runbg cb cv
+if lt pid 0
+ret 10
+end
+if not cx_poll view part cb 3072 get cv 7 tjrn ni11
+ret 11
+end
+if not cx_can cb cv tone
+ret 12
+end
+if ne cx_wait pid 0
+ret 13
+end
+sv = new ulong 8 0
+if not cx_st cb cv 1 sv
+ret 14
+end
+if not cx_want sv 2 0 0 0
+ret 15
+end
+if not cx_absent view part cb 3072 get cv 7 toutr
+ret 16
+end
+n0 = cx_flen view part cb 3072 get cv 7 tjrn
+if ne cx_run cb cv tnc 0
+ret 17
+end
+if ne cx_flen view part cb 3072 get cv 7 tjrn n0
+ret 18
+end
+if ne cx_ver cb cv 0
+ret 19
+end
+ret 0
+end
+
+note c6: cancel, then SIGKILL before the answer, then restart: still cancelled, no new inference.
+fn c6 cb edit uchar 4096 cv edit ulong 16 to ulong
+s = c_base cb cv tcel qslow
+if ne s 0
+ret s
+end
+pid = cx_runbg cb cv
+if lt pid 0
+ret 10
+end
+if not cx_poll view part cb 3072 get cv 7 tjrn ni11
+ret 11
+end
+if not cx_can cb cv tone
+ret 12
+end
+k = killpid int pid 9
+if ne cx_wait pid 1009
+ret 13
+end
+if ne cx_run cb cv tnc 0
+ret 14
+end
+sv = new ulong 8 0
+if not cx_st cb cv 1 sv
+ret 15
+end
+if not and cx_want sv 2 0 0 0 eq get sv 4 1
+ret 16
+end
+if not cx_absent view part cb 3072 get cv 7 toutr
+ret 17
+end
+if ne cx_ver cb cv 0
+ret 18
+end
+ret 0
+end
+
+note c7: the inference result is recorded with stale memory (fahrenheit), the process dies, the
+note owner corrects the memory (celsius), the restarted process discards the stale result,
+note asks again and writes celsius; a later request in a new process also sees celsius.
+fn c7 cb edit uchar 4096 cv edit ulong 16 to ulong
+s = c_base cb cv tfah qwrite
+if ne s 0
+ret s
+end
+if ne cx_run cb cv tcrR 77
+ret 10
+end
+if not cx_absent view part cb 3072 get cv 7 toutr
+ret 11
+end
+if not cx_rem cb cv tcel
+ret 12
+end
+if ne cx_run cb cv tnc 0
+ret 13
+end
+sv = new ulong 8 0
+if not cx_st cb cv 1 sv
+ret 14
+end
+if not and cx_want sv 1 1 1 0 eq get sv 4 2
+ret 15
+end
+if not cx_feq view part cb 3072 get cv 7 toutr artcel
+ret 16
+end
+if eq cx_count view part cb 3072 get cv 7 tjrn nr12 0
+ret 17
+end
+if not cx_sub cb cv ttwo qwrite
+ret 18
+end
+if ne cx_run cb cv tnc 0
+ret 19
+end
+if not cx_feq view part cb 3072 get cv 7 tout2 artcel
+ret 20
+end
+if ne cx_ver cb cv 0
+ret 21
+end
+ret 0
+end
+
+fn c8 cb edit uchar 4096 cv edit ulong 16 to ulong
+s = c_base cb cv tcel qbad
+if ne s 0
+ret s
+end
+if ne cx_run cb cv tnc 0
+ret 10
+end
+sv = new ulong 8 0
+if not cx_st cb cv 1 sv
+ret 11
+end
+if not cx_want sv 3 0 0 0
+ret 12
+end
+if not cx_absent view part cb 3072 get cv 7 toutr
+ret 13
+end
+if ne cx_ver cb cv 0
+ret 14
+end
+ret 0
+end
+
+note c9: the notify line is sent, the process dies before D; restart records UNKNOWN and sends
+note nothing more; a third process changes nothing.
+fn c9 cb edit uchar 4096 cv edit ulong 16 to ulong
+s = c_base cb cv tcel qnot
+if ne s 0
+ret s
+end
+if ne cx_run cb cv tcrW 77
+ret 10
+end
+if ne cx_count view part cb 3072 get cv 7 tsink tone 1
+ret 11
+end
+if ne cx_run cb cv tnc 0
+ret 12
+end
+sv = new ulong 8 0
+if not cx_st cb cv 1 sv
+ret 13
+end
+if not cx_want sv 4 1 0 1
+ret 14
+end
+n0 = cx_flen view part cb 3072 get cv 7 tjrn
+if ne cx_run cb cv tnc 0
+ret 15
+end
+if ne cx_flen view part cb 3072 get cv 7 tjrn n0
+ret 16
+end
+if ne cx_count view part cb 3072 get cv 7 tsink tone 1
+ret 17
+end
+if ne cx_ver cb cv 0
+ret 18
+end
+ret 0
+end
+
+fn c10 cb edit uchar 4096 cv edit ulong 16 to ulong
+s = c_base cb cv tcel qnot
+if ne s 0
+ret s
+end
+if ne cx_run cb cv tnc 0
+ret 10
+end
+sv = new ulong 8 0
+if not cx_st cb cv 1 sv
+ret 11
+end
+if not cx_want sv 1 1 1 0
+ret 12
+end
+if ne cx_count view part cb 3072 get cv 7 tsink tone 1
+ret 13
+end
+if ne cx_ver cb cv 0
+ret 14
+end
+ret 0
+end
+
+fn c11 cb edit uchar 4096 cv edit ulong 16 to ulong
+s = c_base cb cv tcel qplain
+if ne s 0
+ret s
+end
+if ne cx_run cb cv tnc 0
+ret 10
+end
+sv = new ulong 8 0
+if not cx_st cb cv 1 sv
+ret 11
+end
+if not cx_want sv 5 0 0 0
+ret 12
+end
+if ne cx_ver cb cv 0
+ret 13
+end
+ret 0
+end
+
+note c12: a correct run, then one byte appended to the artifact: the verifier must refuse it.
+fn c12 cb edit uchar 4096 cv edit ulong 16 to ulong
+s = c1 cb cv
+if ne s 0
+ret s
+end
+o = new uchar 1024 0
+n = cx_out view part cb 3072 get cv 7 toutr o
+r = rc_append view part o 0 n tnl 1
+if lt r 0
+ret 30
+end
+if ne cx_ver cb cv 1
+ret 31
+end
+ret 0
+end
+
+note c13: a correct run, then a file no journal record accounts for: the verifier must refuse it.
+fn c13 cb edit uchar 4096 cv edit ulong 16 to ulong
+s = c1 cb cv
+if ne s 0
+ret s
+end
+o = new uchar 1024 0
+n = cx_out view part cb 3072 get cv 7 tout99 o
+r = rc_append view part o 0 n tnl 1
+if lt r 0
+ret 30
+end
+if ne cx_ver cb cv 1
+ret 31
+end
+ret 0
+end
+
+note c14: the process dies after the effect, and the journal ends in a torn D (no newline, as a
+note write cut by power loss would leave it). The restart cuts the torn tail, recovers the
+note existing artifact, and writes one well-formed D.
+fn c14 cb edit uchar 4096 cv edit ulong 16 to ulong
+s = c_base cb cv tcel qwrite
+if ne s 0
+ret s
+end
+if ne cx_run cb cv tcrW 77
+ret 10
+end
+o = new uchar 1024 0
+n = cx_out view part cb 3072 get cv 7 tjrn o
+r = rc_append view part o 0 n ttorn len ttorn
+if lt r 0
+ret 11
+end
+if ne cx_run cb cv tnc 0
+ret 12
+end
+sv = new ulong 8 0
+if not cx_st cb cv 1 sv
+ret 13
+end
+if not cx_want sv 1 1 1 0
+ret 14
+end
+if ne cx_count view part cb 3072 get cv 7 tjrn nd1 1
+ret 15
+end
+if ne cx_ver cb cv 0
+ret 16
+end
+ret 0
+end
+
+note cx_case: run case k in WORK/<name> and report it.
+fn cx_case cb edit uchar 4096 cv edit ulong 16 k ulong nm view uchar * to void
+d = new uchar 1024 0
+w = cx_dir cb cv view part nm 0 rc_find nm 0 len nm tsp d
+x = rc_cat cb 3072 view part d 0 w
+put cv 7 w
+s = cx_pick cb cv k
+y = cx_res cv nm eq s 0 s
+end
+
+
+fn cx_pick cb edit uchar 4096 cv edit ulong 16 k ulong to ulong
+if eq k 1
+ret c1 cb cv
+end
+if eq k 2
+ret c2 cb cv
+end
+if eq k 3
+ret c3 cb cv
+end
+if eq k 4
+ret c4 cb cv
+end
+if eq k 5
+ret c5 cb cv
+end
+if eq k 6
+ret c6 cb cv
+end
+if eq k 7
+ret c7 cb cv
+end
+if eq k 8
+ret c8 cb cv
+end
+if eq k 9
+ret c9 cb cv
+end
+if eq k 10
+ret c10 cb cv
+end
+if eq k 11
+ret c11 cb cv
+end
+if eq k 12
+ret c12 cb cv
+end
+if eq k 14
+ret c14 cb cv
+end
+if eq k 13
+ret c13 cb cv
+end
+if eq k 21
+ret r1 cb cv
+end
+if eq k 22
+ret r2 cb cv
+end
+if eq k 23
+ret r3 cb cv
+end
+if eq k 24
+ret r4 cb cv
+end
+ret 99
+end
+
+note ======== REAL cases ========
+note The model is not asked to cooperate: these assert journal, recovery and verifier invariants,
+note and print what the model led to (OBSERVED lines).
+
+fn r_obs cb edit uchar 4096 cv edit ulong 16 nm view uchar * to bool
+sv = new ulong 8 0
+if not cx_st cb cv 1 sv
+ret false
+end
+cx_obs nm sv
+ret ne get sv 0 0
+end
+
+fn r1 cb edit uchar 4096 cv edit ulong 16 to ulong
+s = c_base cb cv tcel qwrite
+if ne s 0
+ret s
+end
+if ne cx_run cb cv tnc 0
+ret 10
+end
+if not r_obs cb cv m1
+ret 11
+end
+if ne cx_ver cb cv 0
+ret 12
+end
+ret 0
+end
+
+fn r2 cb edit uchar 4096 cv edit ulong 16 to ulong
+s = c_base cb cv tcel qwrite
+if ne s 0
+ret s
+end
+pid = cx_runbg cb cv
+if lt pid 0
+ret 10
+end
+if not cx_poll view part cb 3072 get cv 7 tjrn ni11
+ret 11
+end
+k = killpid int pid 9
+r = cx_wait pid
+if ne cx_run cb cv tnc 0
+ret 13
+end
+if not r_obs cb cv m2
+ret 14
+end
+if ne cx_ver cb cv 0
+ret 15
+end
+if ne r 1009
+ret 16
+end
+ret 0
+end
+
+fn r3 cb edit uchar 4096 cv edit ulong 16 to ulong
+s = c_base cb cv tfah qwrite
+if ne s 0
+ret s
+end
+if ne cx_run cb cv tcrR 77
+ret 10
+end
+if not cx_rem cb cv tcel
+ret 11
+end
+if ne cx_run cb cv tnc 0
+ret 12
+end
+if not r_obs cb cv m3
+ret 13
+end
+if eq cx_count view part cb 3072 get cv 7 tjrn nr12 0
+ret 14
+end
+if ne cx_ver cb cv 0
+ret 15
+end
+ret 0
+end
+
+note r4: cancel as soon as the inference is in flight. When the model answers before the cancel
+note record lands, the request may complete: that race is reported, and the invariants still hold.
+fn r4 cb edit uchar 4096 cv edit ulong 16 to ulong
+s = c_base cb cv tcel qwrite
+if ne s 0
+ret s
+end
+pid = cx_runbg cb cv
+if lt pid 0
+ret 10
+end
+if not cx_poll view part cb 3072 get cv 7 tjrn ni11
+ret 11
+end
+if not cx_can cb cv tone
+ret 12
+end
+if ne cx_wait pid 0
+ret 13
+end
+if not r_obs cb cv m4
+ret 14
+end
+if ne cx_ver cb cv 0
+ret 15
+end
+ret 0
+end
+
+note ======== main ========
+
+fn cx_args cb edit uchar 4096 cv edit ulong 16 to int
+m = new uchar 32 0
+mn = rc_arg 1 m
+if le mn 0
+ret 2
+end
+if rc_is m 0 ulong mn tsyn
+put cv 6 1
+end
+if rc_is m 0 ulong mn trl
+put cv 6 2
+end
+if eq get cv 6 0
+ret 2
+end
+b = new uchar 1024 0
+n = rc_arg 2 b
+if or le n 0 ge n 1000
+ret 2
+end
+x = rc_cat cb 0 view part b 0 ulong n
+put cv 0 ulong n
+n = rc_arg 3 b
+if or le n 0 ge n 900
+ret 2
+end
+x = rc_cat cb 1024 view part b 0 ulong n
+put cv 1 ulong n
+if eq get cv 6 2
+n = rc_arg 4 b
+if or le n 0 gt n 5
+ret 2
+end
+x = rc_cat cb 2048 view part b 0 ulong n
+put cv 2 ulong n
+end
+ret 0
+end
+
+note cx_fix: start rpfix with stdout to WORK/fixture.log and read its port.
+fn cx_fix cb edit uchar 4096 cv edit ulong 16 to bool
+pk_bin cb cv trpfix
+pk_add tmax
+o = new uchar 1024 0
+n = cx_out view part cb 1024 get cv 1 tfxlog o
+pid = cx_spawn view part o 0 n
+if lt pid 0
+ret false
+end
+put cv 5 ulong pid
+if not cx_poll view part cb 1024 get cv 1 tfxlog tnl
+ret false
+end
+b = new uchar 65536 0
+k = cx_fread view part cb 1024 get cv 1 tfxlog b
+i = rc_find b 0 ulong k tport
+e = rc_find b i ulong k tnl
+if or ge i ulong k ge e ulong k
+ret false
+end
+s = add i len tport
+x = rc_cat cb 2048 view part b s sub e s
+put cv 2 sub e s
+ret true
+end
+
+fn cx_sum cv edit ulong 16 to int
+b = new uchar 128 0
+p = rc_cat b 0 tsum1
+if eq get cv 6 1
+p = rc_cat b p tsynl
+else
+p = rc_cat b p treal
+end
+if eq get cv 4 0
+p = rc_cat b p tsum2
+p = rc_dec b p get cv 3
+else
+p = rc_cat b p tsum3
+p = rc_dec b p get cv 4
+p = rc_cat b p tsum4
+p = rc_dec b p get cv 3
+end
+p = rc_byte b p 10
+rc_out view part b 0 p
+if eq get cv 4 0
+ret 0
+end
+ret 1
+end
+
+fn main to int
+cb = new uchar 4096 0
+cv = new ulong 16 0
+if ne cx_args cb cv 0
+rc_out tusage
+ret 2
+end
+mk = makedir cb 1024 get cv 1 448
+if ne mk 0
+ret 3
+end
+if eq get cv 6 1
+if not cx_fix cb cv
+ret 3
+end
+cx_case cb cv 1 n1
+cx_case cb cv 2 n2
+cx_case cb cv 3 n3
+cx_case cb cv 4 n4
+cx_case cb cv 5 n5
+cx_case cb cv 6 n6
+cx_case cb cv 7 n7
+cx_case cb cv 8 n8
+cx_case cb cv 9 n9
+cx_case cb cv 10 n10
+cx_case cb cv 11 n11
+cx_case cb cv 12 n12
+cx_case cb cv 13 n13
+cx_case cb cv 14 n14
+k = killpid int long get cv 5 15
+r = cx_wait long get cv 5
+else
+cx_case cb cv 21 m1
+cx_case cb cv 22 m2
+cx_case cb cv 23 m3
+cx_case cb cv 24 m4
+end
+ret cx_sum cv
+end

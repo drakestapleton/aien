@@ -1,0 +1,389 @@
+note SPDX-License-Identifier: AGPL-3.0-or-later
+note rpfix.om: SYNTHETIC protocol fixture for the DRA-172 runtime path. It is not a model and
+note proves interfaces only. It speaks the OpenAI-compatible subset that aien-train serve.om
+note (DRA-119) answers: POST /v1/chat/completions -> one chat.completion JSON object whose
+note choices[0].message carries tool_calls [{id, type function, function {name, arguments}}]
+note with arguments a JSON text in a string, finish_reason tool_calls; GET /health.
+note The answer is chosen by a marker in the request body (the user text):
+note   case=write    write_artifact {"name":"report.txt","text":"unit=U value=21"}, where U is the
+note                 value after `unit=` in the request (the runtime's memory in the system prompt),
+note                 `none` when absent
+note   case=slow     the same answer after 3 s (a window for cancellation and kill)
+note   case=badargs  write_artifact {"name":"../escape.txt","text":42} (two schema violations)
+note   case=notify   notify {"channel":"ops","message":"deploy finished"}
+note   otherwise     plain content, no tool call, finish_reason stop
+note Run: rpfix [maxconn] binds 127.0.0.1 on an ephemeral port, prints `PORT n`, then one
+note `F k case unit` line per answered completion; it exits after maxconn connections (default
+note 64) or 120 s without a connection. model is "synthetic-fixture" in every answer.
+note Compose: { printf 'om2\n'; cat vendor/json.om vendor/jsonw.om vendor/http.om vendor/notls.om
+note rpcom.om rpfix.om; } | omc > rpfix
+
+text fport "PORT "
+text fhealth "/health"
+text fchat "/v1/chat/completions"
+text fget "GET"
+text fpost "POST"
+text fctype "Content-Type"
+text fjson "application/json"
+text fhok "{\"status\":\"ok\",\"model\":\"synthetic-fixture\"}"
+text mwrite "case=write"
+text mslow "case=slow"
+text mbad "case=badargs"
+text mnotif "case=notify"
+text munit "unit="
+text knone "none"
+text kid "id"
+text kobj "object"
+text vcc "chat.completion"
+text kcrt "created"
+text kmodel "model"
+text vmodel "synthetic-fixture"
+text kchoi "choices"
+text kindex "index"
+text kmsg "message"
+text krole "role"
+text vasst "assistant"
+text kcont "content"
+text vplain "SYNTHETIC fixture: no tool call"
+text ktcalls "tool_calls"
+text ktype "type"
+text vfunc "function"
+text kname "name"
+text kargs "arguments"
+text kfin "finish_reason"
+text vtcall "tool_calls"
+text vstop "stop"
+text kusage "usage"
+text kpt "prompt_tokens"
+text kct "completion_tokens"
+text ktt "total_tokens"
+text vwart "write_artifact"
+text vnotif "notify"
+text vrep "report.txt"
+text vesc "../escape.txt"
+text ktext "text"
+text kchan "channel"
+text vops "ops"
+text vdone "deploy finished"
+text vunit "unit="
+text vval " value=21"
+text vfx "fx-"
+text vcall "call_"
+text vzero "_0"
+text fl "F "
+text fcw "write"
+text fcs "slow"
+text fcb "badargs"
+text fcn "notify"
+text fcp "plain"
+
+fn fx_kv ob edit uchar * k view uchar * v view uchar * to void
+js_wsbuf ob k 0 len k
+js_wsbuf ob v 0 len v
+end
+
+fn fx_key ob edit uchar * k view uchar * to void
+js_wsbuf ob k 0 len k
+end
+
+note fx_case: 1 write, 2 slow, 3 badargs, 4 notify, 0 plain.
+fn fx_case b view uchar * to ulong
+n = len b
+if lt rc_find b 0 n mbad n
+ret 3
+end
+if lt rc_find b 0 n mnotif n
+ret 4
+end
+if lt rc_find b 0 n mslow n
+ret 2
+end
+if lt rc_find b 0 n mwrite n
+ret 1
+end
+ret 0
+end
+
+fn fx_wc c uchar to bool
+ret or or and ge c 97 le c 122 and ge c 48 le c 57 eq c 95
+end
+
+note fx_unit: the [a-z0-9_] run after `unit=` into u; its length (0 when absent).
+fn fx_unit b view uchar * u edit uchar 64 to ulong
+n = len b
+i = rc_find b 0 n munit
+if ge i n
+ret 0
+end
+p = add i len munit
+k = ulong 0
+while and lt p n lt k 32 bound 33
+if not fx_wc get b p
+break
+end
+put u k get b p
+k = add k 1
+p = add p 1
+end
+ret k
+end
+
+note fx_args: the arguments JSON text for case cs into ab (a writer array); its length.
+fn fx_args cs ulong u view uchar * ab edit uchar 9232 to long
+tb = new uchar 128 0
+r = js_winit ab
+js_wobj ab
+if eq cs 3
+fx_kv ab kname vesc
+fx_key ab ktext
+js_wulong ab 42
+end
+if eq cs 4
+fx_kv ab kchan vops
+fx_kv ab kmsg vdone
+end
+if or eq cs 1 eq cs 2
+fx_kv ab kname vrep
+fx_key ab ktext
+p = rc_cat tb 0 vunit
+if eq len u 0
+p = rc_cat tb p knone
+else
+p = rc_cat tb p u
+end
+p = rc_cat tb p vval
+js_wsbuf ab tb 0 p
+end
+js_wobje ab
+ret js_wdone ab
+end
+
+note fx_resp: the chat.completion answer for request k and case cs into ob; its length.
+fn fx_resp ob edit uchar 74768 k ulong cs ulong u view uchar * to long
+ab = new uchar 9232 0
+an = long 0
+if ne cs 0
+an = fx_args cs u ab
+if lt an 0
+ret an
+end
+end
+r = js_winit ob
+js_wobj ob
+fx_key ob kid
+ib = new uchar 64 0
+p = rc_cat ib 0 vfx
+p = rc_dec ib p k
+js_wsbuf ob ib 0 p
+fx_kv ob kobj vcc
+fx_key ob kcrt
+js_wulong ob 0
+fx_kv ob kmodel vmodel
+fx_key ob kchoi
+js_warr ob
+js_wobj ob
+fx_key ob kindex
+js_wulong ob 0
+fx_key ob kmsg
+js_wobj ob
+fx_kv ob krole vasst
+fx_key ob kcont
+if eq cs 0
+js_wsbuf ob vplain 0 len vplain
+else
+js_wnull ob
+fx_calls ob k cs ab ulong an
+end
+js_wobje ob
+fx_key ob kfin
+if eq cs 0
+js_wsbuf ob vstop 0 len vstop
+else
+js_wsbuf ob vtcall 0 len vtcall
+end
+js_wobje ob
+js_warre ob
+fx_key ob kusage
+js_wobj ob
+fx_key ob kpt
+js_wulong ob 0
+fx_key ob kct
+js_wulong ob 0
+fx_key ob ktt
+js_wulong ob 0
+js_wobje ob
+js_wobje ob
+ret js_wdone ob
+end
+
+fn fx_calls ob edit uchar 74768 k ulong cs ulong ab edit uchar 9232 an ulong to void
+fx_key ob ktcalls
+js_warr ob
+js_wobj ob
+fx_key ob kid
+ib = new uchar 64 0
+p = rc_cat ib 0 vcall
+p = rc_dec ib p k
+p = rc_cat ib p vzero
+js_wsbuf ob ib 0 p
+fx_kv ob ktype vfunc
+fx_key ob vfunc
+js_wobj ob
+fx_key ob kname
+if eq cs 4
+js_wsbuf ob vnotif 0 len vnotif
+else
+js_wsbuf ob vwart 0 len vwart
+end
+fx_key ob kargs
+js_wsbuf ob ab 1040 an
+js_wobje ob
+js_wobje ob
+js_warre ob
+end
+
+fn fx_log k ulong cs ulong u view uchar * to void
+b = new uchar 128 0
+p = rc_cat b 0 fl
+p = rc_dec b p k
+p = rc_byte b p 32
+if eq cs 0
+p = rc_cat b p fcp
+end
+if eq cs 1
+p = rc_cat b p fcw
+end
+if eq cs 2
+p = rc_cat b p fcs
+end
+if eq cs 3
+p = rc_cat b p fcb
+end
+if eq cs 4
+p = rc_cat b p fcn
+end
+p = rc_byte b p 32
+if eq len u 0
+p = rc_cat b p knone
+else
+p = rc_cat b p u
+end
+p = rc_byte b p 10
+rc_out view part b 0 p
+end
+
+note fx_chat: answer one POST /v1/chat/completions.
+fn fx_chat cs edit ulong 320 io edit uchar 131072 body edit uchar 262144 k ulong to long
+put cs HBCAP 262144
+n = hbodyall cs io body
+if lt n 0
+ret hrsperr cs io 413
+end
+ret fx_ans cs io view part body 0 ulong n k
+end
+
+fn fx_ans cs edit ulong 320 io edit uchar 131072 b view uchar * k ulong to long
+c = fx_case b
+u = new uchar 64 0
+un = fx_unit b u
+if eq c 2
+z = sleepns 3000000000
+end
+ob = new uchar 74768 0
+wl = fx_resp ob k c view part u 0 un
+if lt wl 0
+ret hrsperr cs io 500
+end
+fx_log k c view part u 0 un
+r = hrspst cs io 200
+r = hfe r hhname cs io fctype
+r = hfe r hhval cs io fjson
+r = hfe r hhend cs io 0 ulong wl
+r = hfe r hput cs io view part ob 1040 ulong wl
+ret hfe r hwfin cs io
+end
+
+fn fx_health cs edit ulong 320 io edit uchar 131072 to long
+r = hrspst cs io 200
+r = hfe r hhname cs io fctype
+r = hfe r hhval cs io fjson
+r = hfe r hhend cs io 0 len fhok
+r = hfe r hput cs io fhok
+ret hfe r hwfin cs io
+end
+
+fn fx_route cs edit ulong 320 io edit uchar 131072 body edit uchar 262144 k ulong to long
+if hispath cs io fhealth
+if hismeth cs io fget
+ret fx_health cs io
+end
+ret hrspempty cs io 405
+end
+if hispath cs io fchat
+if hismeth cs io fpost
+ret fx_chat cs io body k
+end
+ret hrspempty cs io 405
+end
+ret hrspempty cs io 404
+end
+
+note fx_one: one connection (one request, Connection: close); negative when none came in 120 s.
+fn fx_one lf int body edit uchar 262144 k ulong to long
+c = haccept lf 120000000000
+if lt c 0
+ret c
+end
+cs = new ulong 320 0
+io = new uchar 131072 0
+r = hinit cs io int c 1
+if lt r 0
+x = hclose cs
+ret 0
+end
+hsettmo cs 30000000000 30000000000
+hsetbdl cs 30000000000
+r = hreqrd cs io
+if gt r 0
+put cs HKEEP 0
+r = fx_route cs io body k
+else
+if lt r 0
+x = hreject cs io r
+end
+end
+x = hclose cs
+ret 0
+end
+
+fn main to int
+body = new uchar 262144 0
+a = new uchar 16 0
+ab = new uchar 32 0
+mx = ulong 64
+n = rc_arg 1 ab
+if gt n 0
+v = rc_num ab 0 ulong n
+if and gt v 0 le v 100000
+mx = v
+end
+end
+r = haddr4 a 2130706433 0
+lf = hlisten a 16
+if lt lf 0
+ret 2
+end
+pb = new uchar 64 0
+p = rc_cat pb 0 fport
+p = rc_dec pb p hport a
+p = rc_byte pb p 10
+rc_out view part pb 0 p
+for j ulong mx
+r = fx_one int lf body add j 1
+if lt r 0
+break
+end
+end
+c = fclose int lf
+ret 0
+end

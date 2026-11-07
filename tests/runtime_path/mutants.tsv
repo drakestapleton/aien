@@ -1,0 +1,7 @@
+id	case_that_must_fail	sed_on_rpath_om	what_it_breaks
+unknown	c9	s|^if eq get sv 10 2$|if eq get sv 10 99|	an interrupted notify is re-sent instead of being recorded UNKNOWN
+schema	c8	s|^if ne code 0$|if eq code 99|	a schema refusal no longer stops the effect
+stale	c7	s|^if or or eq get sv 5 0 ne get sv 6 get gv 4 lt get sv 5 get sv 3$|if or or eq get sv 5 0 ne get sv 6 get sv 6 lt get sv 5 get sv 3|	an inference result made with superseded memory is reused
+cancel	c5	s|^if and eq get sv 2 1 eq get sv 9 0$|if and eq get sv 2 99 eq get sv 9 0|	a cancelled request still performs its effect
+rewrite	c3	s|^if eq s 0$|if eq s 99|	recovery ignores the existing artifact and writes again
+torn	c14	s|^if ne get jb sub m 1 10$|if eq get jb sub m 1 99|	a torn last journal line is not cut before appending

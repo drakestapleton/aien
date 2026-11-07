@@ -1,0 +1,620 @@
+note SPDX-License-Identifier: AGPL-3.0-or-later
+note rpver.om: independent verifier for a DRA-172 runtime-path state directory. It shares no
+note code with rpath.om except the byte helpers of rpcom.om and the vendored JSON reader: it
+note re-derives every request's outcome from the journal itself and checks the artifacts and
+note the notify sink on disk against it.
+note Run: rpver DIR. Prints `RPV id state ok` or `RPV id state FAIL reason` per request, one
+note `RPVX FAIL name` per stray file in out/, then `RPVERIFY PASS requests=N checks=C` (exit 0)
+note or `RPVERIFY FAIL failures=F requests=N checks=C` (exit 1); exit 2 usage, 3 unreadable.
+note Checks per request (state from its single T record):
+note   always       exactly one T; at most one E, one D and one U; every effect intent comes after
+note                an accepted schema check (A id 1)
+note   DONE         E and D present, no U; write_artifact: out/<id>-<name> holds exactly the text
+note                argument of the last inference result, and its length and FNV-1a 64 equal D;
+note                notify: exactly one sink line for id whose channel and message equal the
+note                arguments
+note   REJECTED, CANCELLED, NOTOOL, FAILED   no E, no D, no artifact and no sink line for id
+note   UNKNOWN      notify only; E, U, no D; at most one sink line for id (never retried)
+note Directory checks: no temporary file is left in out/, and every file in out/ belongs to a
+note DONE write_artifact request with that exact name (no effect outside the journal).
+note Context: jb holds the journal at [0, vg 0) and the sink at [1048576, 1048576 + vg 2); db
+note holds DIR (vg 1 bytes). vg 3 failures, 4 checks, 6 .. 10 scratch.
+
+text vjrn "/journal.log"
+text vout "/out"
+text voutd "/out/"
+text vsnk "/sink/notify.log"
+text vtmp ".tmp-"
+text vpass "RPVERIFY PASS requests="
+text vfail "RPVERIFY FAIL failures="
+text vreq " requests="
+text vchk " checks="
+text vrpv "RPV "
+text vrpx "RPVX FAIL "
+text vok " ok\n"
+text vfl " FAIL "
+text kname "name"
+text ktext "text"
+text kchan "channel"
+text kmsg "message"
+text vops "ops"
+text vusage "rpver: usage: rpver DIR\n"
+text wt1 "T count is not 1"
+text we1 "more than one E, D or U"
+text wea "effect intent without an accepted schema check"
+text wdn "DONE without exactly E and D, or with U"
+text wart "artifact missing, unreadable or not equal to the text argument"
+text whs "artifact length or fnv64 differs from D"
+text wsk1 "notify sink lines for id not exactly 1"
+text wskm "sink message or channel differs from the arguments"
+text wnoe "effect recorded for a request that must have none"
+text wnof "artifact present for a request that must have none"
+text wnos "sink line present for a request that must have none"
+text wunk "UNKNOWN without E and U, with D, or not notify"
+text wunk2 "UNKNOWN notify sent more than once"
+text wst "unknown terminal state"
+
+note ======== journal lines ========
+
+fn rv_eol j view uchar * p ulong to ulong
+i = p
+while lt i len j bound 4194305
+if eq get j i 10
+ret i
+end
+i = add i 1
+end
+ret len j
+end
+
+note rv_fld: start of field k in [p, e), e when absent.
+fn rv_fld j view uchar * p ulong e ulong k ulong to ulong
+f = ulong 0
+i = p
+while lt i e bound 4194305
+if eq f k
+ret i
+end
+if eq get j i 32
+f = add f 1
+end
+i = add i 1
+end
+ret e
+end
+
+fn rv_fend j view uchar * s ulong e ulong to ulong
+i = s
+while lt i e bound 4194305
+if eq get j i 32
+ret i
+end
+i = add i 1
+end
+ret e
+end
+
+fn rv_num j view uchar * p ulong e ulong k ulong to ulong
+s = rv_fld j p e k
+ret rc_num j s sub rv_fend j s e s
+end
+
+note rv_derive: counts for request id into c: 0 T count, 1 T state, 2 E count, 3 E tool,
+note 4 D count, 5 D len, 6 D fnv, 7 U count, 8 last R start, 9 last R end, 10 A ok count,
+note 11 E without a preceding A ok, 12 Q count.
+fn rv_derive j view uchar * id ulong c edit ulong 16 to void
+for i ulong 16
+put c i 0
+end
+p = ulong 0
+while lt p len j bound 4194305
+e = rv_eol j p
+if eq rv_num j p e 1 id
+rv_rec j p e c
+end
+p = add e 1
+end
+end
+
+fn rv_rec j view uchar * p ulong e ulong c edit ulong 16 to void
+t = get j p
+if eq t 81
+put c 12 add get c 12 1
+end
+if eq t 84
+put c 0 add get c 0 1
+put c 1 rv_num j p e 2
+end
+if eq t 69
+put c 2 add get c 2 1
+put c 3 rv_num j p e 2
+if eq get c 10 0
+put c 11 1
+end
+end
+if eq t 68
+put c 4 add get c 4 1
+put c 5 rv_num j p e 3
+put c 6 rv_num j p e 4
+end
+if eq t 85
+put c 7 add get c 7 1
+end
+if eq t 82
+put c 8 p
+put c 9 e
+end
+if eq t 65
+if eq rv_num j p e 2 1
+put c 10 add get c 10 1
+end
+end
+end
+
+note ======== arguments of the last R ========
+
+note rv_args: argument member w (0: name/channel, 1: text/message) of the last R line, for the
+note tool its E names, into o; its length or -1.
+fn rv_args j view uchar * c edit ulong 16 w ulong o edit uchar 4096 to long
+if eq get c 9 0
+ret -1
+end
+ab = new uchar 4096 0
+s = rv_fld j get c 8 get c 9 5
+n = rc_unhex j s sub rv_fend j s get c 9 s ab
+if le n 0
+ret -1
+end
+ret rv_member view part ab 0 ulong n get c 3 w o
+end
+
+fn rv_member a view uchar * tool ulong w ulong o edit uchar 4096 to long
+tp = new uint 65552 0
+r = js_init tp 8192 8
+k = js_parse a tp len a
+if lt k 0
+ret -1
+end
+if ne js_type tp 0 jsobj
+ret -1
+end
+m = js_first tp 0
+for i ulong 4
+if eq m jsnone
+ret -1
+end
+if rv_key a js_off tp m tool w
+if ne js_type tp add m 1 jsstr
+ret -1
+end
+ret js_sget a js_off tp add m 1 o
+end
+m = js_mnext tp m
+end
+ret -1
+end
+
+fn rv_key a view uchar * off ulong tool ulong w ulong to bool
+if eq tool 2
+if eq w 0
+ret js_streq a off kchan
+end
+ret js_streq a off kmsg
+end
+if eq w 0
+ret js_streq a off kname
+end
+ret js_streq a off ktext
+end
+
+note ======== files ========
+
+fn rv_fnv s view uchar * to ulong
+h = ulong 14695981039346656037
+for i ulong len s
+h = xor h ulong get s i
+h = mul h 1099511628211
+end
+ret h
+end
+
+note rv_sink: sink lines for id: vg 6 count, the last line's message into o (vg 7 length), vg 8 = 1
+note when the last line's channel equals nb[0, vg 9).
+fn rv_sink sk view uchar * id ulong nb edit uchar 4096 o edit uchar 4096 vg edit ulong 16 to void
+put vg 6 0
+put vg 7 0
+put vg 8 0
+p = ulong 0
+while lt p len sk bound 4194305
+e = rv_eol sk p
+if eq rv_num sk p e 0 id
+put vg 6 add get vg 6 1
+rv_sline view part sk p sub e p nb o vg
+end
+p = add e 1
+end
+end
+
+fn rv_sline ln view uchar * nb edit uchar 4096 o edit uchar 4096 vg edit ulong 16 to void
+e = len ln
+s = rv_fld ln 0 e 1
+f = rv_fend ln s e
+put vg 8 0
+if rc_is ln s sub f s view part nb 0 get vg 9
+put vg 8 1
+end
+s = rv_fld ln 0 e 2
+n = rc_unhex ln s sub rv_fend ln s e s o
+put vg 7 0
+if ge n 0
+put vg 7 ulong n
+end
+end
+
+note ======== per-request verdict ========
+
+fn rv_bad vg edit ulong 16 id ulong st ulong why view uchar * to void
+put vg 3 add get vg 3 1
+b = new uchar 256 0
+p = rc_cat b 0 vrpv
+p = rc_dec b p id
+p = rc_byte b p 32
+p = rc_dec b p st
+p = rc_cat b p vfl
+p = rc_cat b p why
+p = rc_byte b p 10
+rc_out view part b 0 p
+end
+
+fn rv_chk vg edit ulong 16 ok bool id ulong st ulong why view uchar * to bool
+put vg 4 add get vg 4 1
+if not ok
+rv_bad vg id st why
+end
+ret ok
+end
+
+fn rv_one jb edit uchar 2097152 db edit uchar 512 id ulong vg edit ulong 16 to void
+c = new ulong 16 0
+rv_derive view part jb 0 get vg 0 id c
+st = get c 1
+f0 = get vg 3
+o = rv_chk vg eq get c 0 1 id st wt1
+o = rv_chk vg and and le get c 2 1 le get c 4 1 le get c 7 1 id st we1
+o = rv_chk vg eq get c 11 0 id st wea
+if eq st 1
+rv_done jb db id c vg
+else
+if eq st 4
+rv_unk jb id c vg
+else
+if or or or eq st 2 eq st 3 eq st 5 eq st 6
+rv_none jb db id c vg
+else
+o = rv_chk vg false id st wst
+end
+end
+end
+if eq get vg 3 f0
+rv_okl id st
+end
+end
+
+fn rv_okl id ulong st ulong to void
+b = new uchar 64 0
+p = rc_cat b 0 vrpv
+p = rc_dec b p id
+p = rc_byte b p 32
+p = rc_dec b p st
+p = rc_cat b p vok
+rc_out view part b 0 p
+end
+
+fn rv_done jb edit uchar 2097152 db edit uchar 512 id ulong c edit ulong 16 vg edit ulong 16 to void
+o = rv_chk vg and and eq get c 2 1 eq get c 4 1 eq get c 7 0 id 1 wdn
+nb = new uchar 4096 0
+xb = new uchar 4096 0
+nn = rv_args view part jb 0 get vg 0 c 0 nb
+xn = rv_args view part jb 0 get vg 0 c 1 xb
+put vg 9 0
+put vg 10 0
+if ge nn 0
+put vg 9 ulong nn
+end
+if ge xn 0
+put vg 10 ulong xn
+end
+if eq get c 3 1
+rv_art db id c vg nb xb
+else
+rv_dnot jb id vg nb xb
+end
+end
+
+fn rv_dnot jb edit uchar 2097152 id ulong vg edit ulong 16 nb edit uchar 4096 xb edit uchar 4096 to void
+ob = new uchar 4096 0
+rv_sink view part jb 1048576 get vg 2 id nb ob vg
+o = rv_chk vg eq get vg 6 1 id 1 wsk1
+ok = and eq get vg 8 1 rc_is ob 0 get vg 7 view part xb 0 get vg 10
+o = rv_chk vg and ok gt get vg 10 0 id 1 wskm
+end
+
+fn rv_art db edit uchar 512 id ulong c edit ulong 16 vg edit ulong 16 nb edit uchar 4096 xb edit uchar 4096 to void
+pb = new uchar 1024 0
+p = rc_cat pb 0 view part db 0 get vg 1
+p = rc_cat pb p voutd
+p = rc_dec pb p id
+p = rc_byte pb p 45
+p = rc_cat pb p view part nb 0 get vg 9
+rv_acmp view part pb 0 p id c vg xb
+end
+
+fn rv_acmp pa view uchar * id ulong c edit ulong 16 vg edit ulong 16 xb edit uchar 4096 to void
+rb = new uchar 8193 0
+r = rc_read pa rb
+ok = false
+hs = false
+if ge r 0
+ok = rv_txteq rb ulong r xb get vg 10
+hs = rv_dhash rb ulong r c
+end
+o = rv_chk vg and gt get vg 9 0 ok id 1 wart
+o = rv_chk vg hs id 1 whs
+end
+
+fn rv_txteq rb edit uchar 8193 n ulong xb edit uchar 4096 xn ulong to bool
+ret rc_same view part rb 0 n view part xb 0 xn
+end
+
+fn rv_dhash rb edit uchar 8193 n ulong c edit ulong 16 to bool
+ret and eq get c 5 n eq get c 6 rv_fnv view part rb 0 n
+end
+
+fn rv_unk jb edit uchar 2097152 id ulong c edit ulong 16 vg edit ulong 16 to void
+o = rv_chk vg and and and eq get c 2 1 eq get c 7 1 eq get c 4 0 eq get c 3 2 id 4 wunk
+nb = new uchar 4096 0
+ob = new uchar 4096 0
+put vg 9 0
+rv_sink view part jb 1048576 get vg 2 id nb ob vg
+o = rv_chk vg le get vg 6 1 id 4 wunk2
+end
+
+fn rv_none jb edit uchar 2097152 db edit uchar 512 id ulong c edit ulong 16 vg edit ulong 16 to void
+st = get c 1
+o = rv_chk vg and eq get c 2 0 eq get c 4 0 id st wnoe
+o = rv_chk vg not rv_hasart view part db 0 get vg 1 id id st wnof
+nb = new uchar 4096 0
+ob = new uchar 4096 0
+put vg 9 0
+rv_sink view part jb 1048576 get vg 2 id nb ob vg
+o = rv_chk vg eq get vg 6 0 id st wnos
+end
+
+note ======== out/ listing ========
+
+note rv_ls: the names in DIR/out (no . and ..) as NUL-terminated entries into nb; their total length.
+fn rv_ls dir view uchar * nb edit uchar 65536 to long
+pb = new uchar 1024 0
+p = rc_cat pb 0 dir
+p = rc_cat pb p vout
+fd = fopen pb 0 p 540672 0
+if lt fd 0
+ret fd
+end
+db = new uchar 32768 0
+w = ulong 0
+for it ulong 64
+n = getdnts int fd db 0 32768
+if le n 0
+break
+end
+w = rv_dents db ulong n nb w
+end
+c = fclose int fd
+ret long w
+end
+
+fn rv_dot db edit uchar 32768 s ulong k ulong to bool
+if and eq k 1 eq get db s 46
+ret true
+end
+ret and and eq k 2 eq get db s 46 eq get db add s 1 46
+end
+
+fn rv_nlen db edit uchar 32768 s ulong lim ulong to ulong
+k = ulong 0
+while and lt add s k lim ne get db add s k 0 bound 4097
+k = add k 1
+end
+ret k
+end
+
+fn rv_dents db edit uchar 32768 n ulong nb edit uchar 65536 w ulong to ulong
+q = w
+o = ulong 0
+while lt add o 19 n bound 32769
+rl = or ulong get db add o 16 shl ulong get db add o 17 8
+if eq rl 0
+break
+end
+q = rv_dent1 db o rl nb q
+o = add o rl
+end
+ret q
+end
+
+fn rv_dent1 db edit uchar 32768 o ulong rl ulong nb edit uchar 65536 q ulong to ulong
+s = add o 19
+k = rv_nlen db s add o rl
+if rv_dot db s k
+ret q
+end
+if ge add add q k 1 len nb
+ret q
+end
+w = rc_cat nb q view part db s k
+ret rc_byte nb w 0
+end
+
+fn rv_nend nb edit uchar 65536 p ulong w ulong to ulong
+e = p
+while lt e w bound 65537
+if eq get nb e 0
+ret e
+end
+e = add e 1
+end
+ret w
+end
+
+note rv_hasart: some out/ entry starts with `<id>-`.
+fn rv_hasart dir view uchar * id ulong to bool
+nb = new uchar 65536 0
+w = rv_ls dir nb
+if le w 0
+ret false
+end
+pf = new uchar 32 0
+pn = rc_dec pf 0 id
+pn = rc_byte pf pn 45
+p = ulong 0
+while lt p ulong w bound 65537
+e = rv_nend nb p ulong w
+if and ge sub e p pn rc_is nb p pn view part pf 0 pn
+ret true
+end
+p = add e 1
+end
+ret false
+end
+
+note rv_stray: every out/ entry is `<id>-<name>` of a DONE write_artifact request with that exact
+note name; temporary files and anything else are failures.
+fn rv_stray jb edit uchar 2097152 db edit uchar 512 vg edit ulong 16 to void
+nb = new uchar 65536 0
+w = rv_ls view part db 0 get vg 1 nb
+if le w 0
+ret
+end
+p = ulong 0
+while lt p ulong w bound 65537
+e = rv_nend nb p ulong w
+ok = rv_owned view part jb 0 get vg 0 view part nb p sub e p
+put vg 4 add get vg 4 1
+if not ok
+put vg 3 add get vg 3 1
+rv_xl view part nb p sub e p
+end
+p = add e 1
+end
+end
+
+fn rv_xl nm view uchar * to void
+b = new uchar 512 0
+q = rc_cat b 0 vrpx
+q = rc_cat b q nm
+q = rc_byte b q 10
+rc_out view part b 0 q
+end
+
+fn rv_dig c uchar to bool
+ret and ge c 48 le c 57
+end
+
+fn rv_owned j view uchar * nm view uchar * to bool
+if and ge len nm len vtmp rc_is nm 0 len vtmp vtmp
+ret false
+end
+k = ulong 0
+while and lt k len nm rv_dig get nm k bound 33
+k = add k 1
+end
+if or or eq k 0 ge k len nm ne get nm k 45
+ret false
+end
+c = new ulong 16 0
+rv_derive j rc_num nm 0 k c
+if or ne get c 1 1 ne get c 3 1
+ret false
+end
+xb = new uchar 4096 0
+n = rv_args j c 0 xb
+if le n 0
+ret false
+end
+ret rc_is nm add k 1 sub sub len nm k 1 view part xb 0 ulong n
+end
+
+note ======== main ========
+
+fn rv_ids j view uchar * ids edit ulong 64 to ulong
+c = ulong 0
+p = ulong 0
+while lt p len j bound 4194305
+e = rv_eol j p
+if and eq get j p 81 lt c 64
+put ids c rv_num j p e 1
+c = add c 1
+end
+p = add e 1
+end
+ret c
+end
+
+fn rv_sum vg edit ulong 16 n ulong to int
+b = new uchar 128 0
+p = ulong 0
+if eq get vg 3 0
+p = rc_cat b 0 vpass
+p = rc_dec b p n
+else
+p = rc_cat b 0 vfail
+p = rc_dec b p get vg 3
+p = rc_cat b p vreq
+p = rc_dec b p n
+end
+p = rc_cat b p vchk
+p = rc_dec b p get vg 4
+p = rc_byte b p 10
+rc_out view part b 0 p
+if eq get vg 3 0
+ret 0
+end
+ret 1
+end
+
+fn rv_load db edit uchar 512 vg edit ulong 16 nm view uchar * o edit uchar * to long
+pb = new uchar 1024 0
+p = rc_cat pb 0 view part db 0 get vg 1
+p = rc_cat pb p nm
+ret rc_read view part pb 0 p o
+end
+
+fn main to int
+db = new uchar 512 0
+vg = new ulong 16 0
+dn = rc_arg 1 db
+if or le dn 0 ge dn 400
+rc_out vusage
+ret 2
+end
+put vg 1 ulong dn
+jb = new uchar 2097152 0
+jn = rv_load db vg vjrn part jb 0 1048576
+if lt jn 0
+ret 3
+end
+put vg 0 ulong jn
+sn = rv_load db vg vsnk part jb 1048576 1048576
+if lt sn 0
+sn = long 0
+end
+put vg 2 ulong sn
+ids = new ulong 64 0
+n = rv_ids view part jb 0 get vg 0 ids
+for i ulong n
+rv_one jb db get ids i vg
+end
+rv_stray jb db vg
+ret rv_sum vg n
+end
