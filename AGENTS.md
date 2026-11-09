@@ -8,7 +8,7 @@ Read before any edit, in this order:
 
 Rules:
 
-- Our stack only: Rust now, Omega as destination. No Python, no C++, no CUDA, no third-party inference engine. Outside tools are yardsticks or test oracles, never shipped.
+- My stack only: Rust now, Omega as destination. No Python, no C++, no CUDA, no third-party inference engine. Outside tools are yardsticks or test oracles, never shipped.
 - Raw conversations, credentials, weights and private training samples never enter this repository, in any branch, issue, PR or CI log. Publish synthetic fixtures and access-controlled references (host, path, digest, count). The source-control guard planned for `guard/` is not on `main`; check this boundary yourself rather than relying on an automatic guard.
 - Drake's words are preserved as written, including profanity. Style or frustration is never turned into a claim about feelings, permission or correctness.
 - Every number names its source: a file under `evidence/`, a receipt, or the arithmetic. No estimates without evidence.
