@@ -1,5 +1,9 @@
 # Aien
 
+<!-- languages -->
+[English](README.md) · **简体中文**
+<!-- /languages -->
+
 Aien 是 AIEN 系统旨在长期维系的持久主体：在 iMac、Raspberry Pi、DGX Spark 和 MacBook 上保持同一个身份（架构 ADR 0035）。本仓库是 Aien 的项目主页：包括使命、阶段账本（P0 至 P7），以及一份计划，涵盖数据契约、评估框架、发布清单，以及首个通过鉴定的版本 **Aien B0** 的验收契约。
 
 Allen 现已演化为最终的 Aien（2026-10-26）。在此之前，本仓库名为 `aien-dev/allen`；GitHub 会重定向旧的 URL。
