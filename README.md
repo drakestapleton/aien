@@ -23,6 +23,7 @@ The only evaluation flow on `main` today is the microjob admission kernel ([docs
 | Data contracts and synthetic fixtures planned | Raw conversations, trained weights, secrets (never in any repository) |
 | Evaluation harness and release manifests planned (digests, pins) | Memory (Cortex, ADR 0022), runtime authority (aegis-runtime-mv, aien-sovereign-core-mv), protocols (aien-protocols-mv) |
 | Programme close guard and source-control guard planned, not present on `main` | Model weights and model generations (recorded by digest only) |
+
 Moving coordination here does not mint a second identity and does not fork memory or authority. Component owners stay where they are; this repository links to them.
 
 ## Layout
